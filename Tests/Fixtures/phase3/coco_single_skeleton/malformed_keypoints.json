@@ -1,0 +1,52 @@
+{
+  "images": [
+    {
+      "id": 1,
+      "file_name": "img_000.png",
+      "width": 640,
+      "height": 480
+    }
+  ],
+  "annotations": [
+    {
+      "id": 1,
+      "image_id": 1,
+      "category_id": 1,
+      "keypoints": [
+        100.0,
+        200.0
+      ],
+      "num_keypoints": 1,
+      "bbox": [
+        100,
+        200,
+        0,
+        0
+      ],
+      "area": 0,
+      "iscrowd": 0
+    }
+  ],
+  "categories": [
+    {
+      "id": 1,
+      "name": "fly",
+      "supercategory": "insect",
+      "keypoints": [
+        "head",
+        "thorax",
+        "abdomen"
+      ],
+      "skeleton": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    }
+  ]
+}

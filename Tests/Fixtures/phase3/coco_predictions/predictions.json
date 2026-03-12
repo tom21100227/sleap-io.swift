@@ -1,0 +1,117 @@
+{
+  "images": [
+    {
+      "id": 1,
+      "file_name": "pred_000.png",
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": 2,
+      "file_name": "pred_001.png",
+      "width": 640,
+      "height": 480
+    }
+  ],
+  "annotations": [
+    {
+      "id": 1,
+      "image_id": 1,
+      "category_id": 1,
+      "keypoints": [
+        100.0,
+        200.0,
+        2,
+        150.0,
+        250.0,
+        2,
+        200.0,
+        300.0,
+        2
+      ],
+      "num_keypoints": 3,
+      "score": 0.95,
+      "bbox": [
+        100,
+        200,
+        100,
+        100
+      ],
+      "area": 10000,
+      "iscrowd": 0
+    },
+    {
+      "id": 2,
+      "image_id": 1,
+      "category_id": 1,
+      "keypoints": [
+        110.0,
+        210.0,
+        2,
+        160.0,
+        260.0,
+        2,
+        210.0,
+        310.0,
+        2
+      ],
+      "num_keypoints": 3,
+      "bbox": [
+        110,
+        210,
+        100,
+        100
+      ],
+      "area": 10000,
+      "iscrowd": 0
+    },
+    {
+      "id": 3,
+      "image_id": 2,
+      "category_id": 1,
+      "keypoints": [
+        120.0,
+        220.0,
+        2,
+        170.0,
+        270.0,
+        2,
+        220.0,
+        320.0,
+        2
+      ],
+      "num_keypoints": 3,
+      "score": 0.82,
+      "bbox": [
+        120,
+        220,
+        100,
+        100
+      ],
+      "area": 10000,
+      "iscrowd": 0
+    }
+  ],
+  "categories": [
+    {
+      "id": 1,
+      "name": "fly",
+      "supercategory": "insect",
+      "keypoints": [
+        "head",
+        "thorax",
+        "abdomen"
+      ],
+      "skeleton": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    }
+  ]
+}

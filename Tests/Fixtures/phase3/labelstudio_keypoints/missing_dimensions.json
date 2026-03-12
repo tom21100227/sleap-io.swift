@@ -1,0 +1,42 @@
+[
+  {
+    "id": 99,
+    "data": {
+      "image": "bad.png"
+    },
+    "meta": {
+      "video": {
+        "filename": "bad.png",
+        "frame_idx": 0,
+        "shape": [
+          1,
+          480,
+          640,
+          3
+        ]
+      }
+    },
+    "annotations": [
+      {
+        "result": [
+          {
+            "image_rotation": 0,
+            "value": {
+              "x": 50.0,
+              "y": 50.0,
+              "keypointlabels": [
+                "head"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "bad-kp-uuid"
+          }
+        ],
+        "was_cancelled": false,
+        "ground_truth": false
+      }
+    ]
+  }
+]

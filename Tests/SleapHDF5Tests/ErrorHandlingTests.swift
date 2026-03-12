@@ -52,43 +52,51 @@ final class ErrorHandlingTests: XCTestCase {
 
     // MARK: - E02: Unsupported format handling
 
-    func testE02_unsupportedFormatThrows() async {
-        // The current implementation defaults unknown extensions to .slp,
-        // so a truly unsupported format test uses an explicit format override
-        // or tests a known-unsupported format like .json in Phase 1.
+    func testE02_unknownExtensionThrowsUnsupportedFormat() async {
         let tempDir = FileManager.default.temporaryDirectory
-        let jsonURL = tempDir.appendingPathComponent("labels_\(UUID().uuidString).json")
-        try? Data("{}".utf8).write(to: jsonURL)
-        defer { try? FileManager.default.removeItem(at: jsonURL) }
+        let txtURL = tempDir.appendingPathComponent("labels_\(UUID().uuidString).txt")
+        try? Data("{}".utf8).write(to: txtURL)
+        defer { try? FileManager.default.removeItem(at: txtURL) }
 
         do {
-            let _ = try await Labels.load(from: jsonURL, format: .cocoJSON)
+            let _ = try await Labels.load(from: txtURL)
             XCTFail("Loading unsupported format should throw")
         } catch let error as SleapIOError {
             switch error {
             case .unsupportedFormat:
                 break  // Expected
             default:
-                XCTFail("Expected unsupportedFormat for .cocoJSON in Phase 1, got: \(error)")
+                XCTFail("Expected unsupportedFormat, got: \(error)")
             }
         } catch {
             XCTFail("Expected SleapIOError.unsupportedFormat, got: \(error)")
         }
     }
 
-    func testE02_explicitUnsupportedFormatCSV() async {
+    func testE02_labelStudioLoadRequiresExplicitMapping() async {
         let tempDir = FileManager.default.temporaryDirectory
-        let csvURL = tempDir.appendingPathComponent("labels_\(UUID().uuidString).csv")
-        try? Data("x,y\n1,2".utf8).write(to: csvURL)
-        defer { try? FileManager.default.removeItem(at: csvURL) }
+        let jsonURL = tempDir.appendingPathComponent("labels_\(UUID().uuidString).json")
+        let taskJSON = """
+        [
+          {
+            "id": 1,
+            "data": { "image": "img.png" },
+            "annotations": []
+          }
+        ]
+        """
+        try? Data(taskJSON.utf8).write(to: jsonURL)
+        defer { try? FileManager.default.removeItem(at: jsonURL) }
 
         do {
-            let _ = try await Labels.load(from: csvURL, format: .csv)
-            XCTFail("Loading unsupported CSV format should throw in Phase 1")
+            let _ = try await Labels.load(from: jsonURL)
+            XCTFail("Loading Label Studio without a mapping should throw")
         } catch let error as SleapIOError {
             switch error {
-            case .unsupportedFormat:
-                break  // Expected
+            case .unsupportedFormat(let message):
+                XCTAssertTrue(
+                    message.contains("Label Studio"),
+                    "Expected a Label Studio guidance message, got: \(message)")
             default:
                 XCTFail("Expected unsupportedFormat, got: \(error)")
             }

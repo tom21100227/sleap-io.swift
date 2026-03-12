@@ -1,0 +1,2 @@
+video,frame_idx,skeleton,instance,node,x,y
+video1.mp4,0,fly,0,head,100.0,200.0

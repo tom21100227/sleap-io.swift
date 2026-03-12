@@ -1,0 +1,6 @@
+path: .
+train: images/train
+val: images/train
+names:
+  0: fly
+kpt_shape: [3, 3]

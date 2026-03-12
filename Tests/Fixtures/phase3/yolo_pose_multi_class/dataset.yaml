@@ -1,0 +1,7 @@
+path: .
+train: images/train
+val: images/train
+names:
+  0: fly
+  1: mouse
+kpt_shape: [3, 3]

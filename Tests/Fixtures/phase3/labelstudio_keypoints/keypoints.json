@@ -1,0 +1,352 @@
+[
+  {
+    "id": 1,
+    "data": {
+      "image": "img_000.png"
+    },
+    "meta": {
+      "video": {
+        "filename": "img_000.png",
+        "frame_idx": 0,
+        "shape": [
+          1,
+          480,
+          640,
+          3
+        ]
+      }
+    },
+    "annotations": [
+      {
+        "result": [
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 0,
+              "y": 0,
+              "width": 640,
+              "height": 480,
+              "rotation": 0,
+              "rectanglelabels": [
+                "instance_class"
+              ]
+            },
+            "id": "inst-0-uuid",
+            "from_name": "individuals",
+            "to_name": "image",
+            "type": "rectanglelabels"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 15.625,
+              "y": 41.66666666666667,
+              "keypointlabels": [
+                "head"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-0-0-uuid"
+          },
+          {
+            "from_id": "kp-0-0-uuid",
+            "to_id": "inst-0-uuid",
+            "type": "relation",
+            "direction": "right"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 23.4375,
+              "y": 52.083333333333336,
+              "keypointlabels": [
+                "thorax"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-0-1-uuid"
+          },
+          {
+            "from_id": "kp-0-1-uuid",
+            "to_id": "inst-0-uuid",
+            "type": "relation",
+            "direction": "right"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 31.25,
+              "y": 62.5,
+              "keypointlabels": [
+                "abdomen"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-0-2-uuid"
+          },
+          {
+            "from_id": "kp-0-2-uuid",
+            "to_id": "inst-0-uuid",
+            "type": "relation",
+            "direction": "right"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 0,
+              "y": 0,
+              "width": 640,
+              "height": 480,
+              "rotation": 0,
+              "rectanglelabels": [
+                "instance_class"
+              ]
+            },
+            "id": "inst-1-uuid",
+            "from_name": "individuals",
+            "to_name": "image",
+            "type": "rectanglelabels"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 17.1875,
+              "y": 43.75,
+              "keypointlabels": [
+                "head"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-1-0-uuid"
+          },
+          {
+            "from_id": "kp-1-0-uuid",
+            "to_id": "inst-1-uuid",
+            "type": "relation",
+            "direction": "right"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 25.0,
+              "y": 54.166666666666664,
+              "keypointlabels": [
+                "thorax"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-1-1-uuid"
+          },
+          {
+            "from_id": "kp-1-1-uuid",
+            "to_id": "inst-1-uuid",
+            "type": "relation",
+            "direction": "right"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 32.8125,
+              "y": 64.58333333333334,
+              "keypointlabels": [
+                "abdomen"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-1-2-uuid"
+          },
+          {
+            "from_id": "kp-1-2-uuid",
+            "to_id": "inst-1-uuid",
+            "type": "relation",
+            "direction": "right"
+          }
+        ],
+        "was_cancelled": false,
+        "ground_truth": false
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "data": {
+      "image": "img_001.png"
+    },
+    "meta": {
+      "video": {
+        "filename": "img_001.png",
+        "frame_idx": 0,
+        "shape": [
+          1,
+          480,
+          640,
+          3
+        ]
+      }
+    },
+    "annotations": [
+      {
+        "result": [
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 18.75,
+              "y": 45.83333333333333,
+              "keypointlabels": [
+                "head"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-2-0-uuid"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 26.5625,
+              "y": 56.25,
+              "keypointlabels": [
+                "thorax"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-2-1-uuid"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 34.375,
+              "y": 66.66666666666666,
+              "keypointlabels": [
+                "abdomen"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-2-2-uuid"
+          }
+        ],
+        "was_cancelled": false,
+        "ground_truth": false
+      }
+    ]
+  },
+  {
+    "id": 3,
+    "data": {
+      "image": "img_002.png"
+    },
+    "meta": {
+      "video": {
+        "filename": "img_002.png",
+        "frame_idx": 0,
+        "shape": [
+          1,
+          480,
+          640,
+          3
+        ]
+      }
+    },
+    "annotations": [
+      {
+        "result": [],
+        "was_cancelled": false,
+        "ground_truth": false
+      }
+    ],
+    "predictions": [
+      {
+        "result": [
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 15.625,
+              "y": 41.66666666666667,
+              "keypointlabels": [
+                "head"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-pred-0-uuid"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 23.4375,
+              "y": 52.083333333333336,
+              "keypointlabels": [
+                "thorax"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-pred-1-uuid"
+          },
+          {
+            "original_width": 640,
+            "original_height": 480,
+            "image_rotation": 0,
+            "value": {
+              "x": 31.25,
+              "y": 62.5,
+              "keypointlabels": [
+                "abdomen"
+              ]
+            },
+            "from_name": "keypoint-label",
+            "to_name": "image",
+            "type": "keypointlabels",
+            "id": "kp-pred-2-uuid"
+          }
+        ],
+        "score": 0.91
+      }
+    ]
+  }
+]

@@ -652,6 +652,9 @@ Transform operations on points and instances:
 
 ## Phase 3: Interchange Formats
 
+Detailed behavioral requirements, supported subsets, lossy-field rules, and
+acceptance criteria for this phase are defined in `PHASE3_SPEC.md`.
+
 ### Step 3.1: COCO JSON
 
 **Files:**
@@ -664,24 +667,34 @@ Read and write COCO keypoints JSON format. Uses Swift's `Codable` for JSON handl
 **Files:**
 - `Sources/SleapIO/Codecs/CSVCodec.swift`
 
-Flat CSV with columns: video, frame_idx, track, node, x, y, visible, score.
+Canonical long-table CSV format. The exact schema is defined in
+`PHASE3_SPEC.md` and includes explicit `instance` and `skeleton` columns so
+reconstruction is unambiguous.
 
 ### Step 3.3: Label Studio JSON
 
 **Files:**
 - `Sources/SleapIO/Codecs/LabelStudioCodec.swift`
 
+Image-based keypoint tasks only in the first pass. Skeleton mapping is supplied
+explicitly by codec configuration; it is not inferred from Label Studio labels.
+
 ### Step 3.4: Ultralytics YOLO
 
 **Files:**
 - `Sources/SleapIO/Codecs/YOLOCodec.swift`
 
-Directory-based format with images + label text files.
+Directory-based pose dataset with images + label text files. The first pass is
+single-class and requires explicit node order configuration as defined in
+`PHASE3_SPEC.md`.
 
 ### Step 3.5: AlphaTracker JSON (read-only)
 
 **Files:**
 - `Sources/SleapIO/Codecs/AlphaTrackerCodec.swift`
+
+Read-only import aligned to the Python `sleap-io` supported subset and the
+fixture contract defined in `PHASE3_SPEC.md`.
 
 ---
 
@@ -762,3 +775,5 @@ All I/O operations `throw`. No `Result`, no optionals for error cases.
 | swift-argument-parser | >= 1.3 | CLI (Phase 4) |
 
 No other external Swift package dependencies. The library intentionally minimizes dependencies for downstream integration simplicity.
+Read-only import aligned to the Python `sleap-io` supported subset and the
+fixture contract defined in `PHASE3_SPEC.md`.

@@ -19,6 +19,7 @@ public enum FileFormat: Sendable {
     case csv
     case labelStudio
     case yolo
+    case alphaTracker
     case analysisHDF5
 }
 

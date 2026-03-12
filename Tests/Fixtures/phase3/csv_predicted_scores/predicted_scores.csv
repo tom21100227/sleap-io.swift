@@ -1,0 +1,13 @@
+video,frame_idx,skeleton,instance,node,x,y,visible,complete,instance_type,instance_score,point_score,tracking_score,track
+video1.mp4,0,fly,0,head,100.0,200.0,true,true,user,,,0.0,track_A
+video1.mp4,0,fly,0,thorax,150.0,250.0,true,true,user,,,0.0,track_A
+video1.mp4,0,fly,0,abdomen,200.0,300.0,true,true,user,,,0.0,track_A
+video1.mp4,0,fly,1,head,110.0,210.0,true,true,predicted,0.95,0.99,0.88,track_B
+video1.mp4,0,fly,1,thorax,160.0,260.0,true,true,predicted,0.95,0.85,0.88,track_B
+video1.mp4,0,fly,1,abdomen,210.0,310.0,true,true,predicted,0.95,0.92,0.88,track_B
+video1.mp4,5,fly,0,head,120.0,220.0,true,true,predicted,0.82,0.7,0.0,
+video1.mp4,5,fly,0,thorax,170.0,270.0,true,true,predicted,0.82,0.65,0.0,
+video1.mp4,5,fly,0,abdomen,220.0,320.0,true,true,predicted,0.82,0.8,0.0,
+video1.mp4,5,fly,1,head,100.0,200.0,true,true,user,,,0.0,track_A
+video1.mp4,5,fly,1,thorax,150.0,250.0,true,true,user,,,0.0,track_A
+video1.mp4,5,fly,1,abdomen,200.0,300.0,true,true,user,,,0.0,track_A

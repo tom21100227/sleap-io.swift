@@ -1,0 +1,130 @@
+[
+  {
+    "filename": "frame_000.png",
+    "class": "image",
+    "annotations": [
+      {
+        "class": "Face",
+        "height": 50,
+        "width": 50,
+        "x": 75.0,
+        "y": 175.0
+      },
+      {
+        "class": "point",
+        "x": 100.0,
+        "y": 200.0
+      },
+      {
+        "class": "point",
+        "x": 150.0,
+        "y": 250.0
+      },
+      {
+        "class": "point",
+        "x": 200.0,
+        "y": 300.0
+      },
+      {
+        "class": "Face",
+        "height": 50,
+        "width": 50,
+        "x": 85.0,
+        "y": 185.0
+      },
+      {
+        "class": "point",
+        "x": 110.0,
+        "y": 210.0
+      },
+      {
+        "class": "point",
+        "x": 160.0,
+        "y": 260.0
+      },
+      {
+        "class": "point",
+        "x": 210.0,
+        "y": 310.0
+      }
+    ]
+  },
+  {
+    "filename": "frame_001.png",
+    "class": "image",
+    "annotations": [
+      {
+        "class": "Face",
+        "height": 50,
+        "width": 50,
+        "x": 95.0,
+        "y": 195.0
+      },
+      {
+        "class": "point",
+        "x": 120.0,
+        "y": 220.0
+      },
+      {
+        "class": "point",
+        "x": 170.0,
+        "y": 270.0
+      },
+      {
+        "class": "point",
+        "x": 220.0,
+        "y": 320.0
+      }
+    ]
+  },
+  {
+    "filename": "frame_002.png",
+    "class": "image",
+    "annotations": [
+      {
+        "class": "Face",
+        "height": 50,
+        "width": 50,
+        "x": 75.0,
+        "y": 175.0
+      },
+      {
+        "class": "point",
+        "x": 100.0,
+        "y": 200.0
+      },
+      {
+        "class": "point",
+        "x": 150.0,
+        "y": 250.0
+      },
+      {
+        "class": "point",
+        "x": 200.0,
+        "y": 300.0
+      },
+      {
+        "class": "Face",
+        "height": 50,
+        "width": 50,
+        "x": 85.0,
+        "y": 185.0
+      },
+      {
+        "class": "point",
+        "x": 110.0,
+        "y": 210.0
+      },
+      {
+        "class": "point",
+        "x": 160.0,
+        "y": 260.0
+      },
+      {
+        "class": "point",
+        "x": 210.0,
+        "y": 310.0
+      }
+    ]
+  }
+]

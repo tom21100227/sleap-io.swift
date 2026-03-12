@@ -1,0 +1,146 @@
+{
+  "images": [
+    {
+      "id": 1,
+      "file_name": "img_000.png",
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": 2,
+      "file_name": "img_001.png",
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": 3,
+      "file_name": "img_002.png",
+      "width": 640,
+      "height": 480
+    }
+  ],
+  "annotations": [
+    {
+      "id": 1,
+      "image_id": 1,
+      "category_id": 1,
+      "keypoints": [
+        100.0,
+        200.0,
+        2,
+        150.0,
+        250.0,
+        2,
+        200.0,
+        300.0,
+        2
+      ],
+      "num_keypoints": 3,
+      "bbox": [
+        100.0,
+        200.0,
+        100.0,
+        100.0
+      ],
+      "area": 10000.0,
+      "iscrowd": 0
+    },
+    {
+      "id": 2,
+      "image_id": 1,
+      "category_id": 1,
+      "keypoints": [
+        110.0,
+        210.0,
+        2,
+        160.0,
+        260.0,
+        2,
+        210.0,
+        310.0,
+        2
+      ],
+      "num_keypoints": 3,
+      "bbox": [
+        110.0,
+        210.0,
+        100.0,
+        100.0
+      ],
+      "area": 10000.0,
+      "iscrowd": 0
+    },
+    {
+      "id": 3,
+      "image_id": 2,
+      "category_id": 1,
+      "keypoints": [
+        0.0,
+        0.0,
+        0,
+        170.0,
+        270.0,
+        1,
+        220.0,
+        320.0,
+        2
+      ],
+      "num_keypoints": 2,
+      "bbox": [
+        170.0,
+        270.0,
+        50.0,
+        50.0
+      ],
+      "area": 2500.0,
+      "iscrowd": 0
+    },
+    {
+      "id": 4,
+      "image_id": 3,
+      "category_id": 1,
+      "keypoints": [
+        100.0,
+        200.0,
+        2,
+        150.0,
+        250.0,
+        2,
+        200.0,
+        300.0,
+        2
+      ],
+      "num_keypoints": 3,
+      "bbox": [
+        100.0,
+        200.0,
+        100.0,
+        100.0
+      ],
+      "area": 10000.0,
+      "iscrowd": 0
+    }
+  ],
+  "categories": [
+    {
+      "id": 1,
+      "name": "fly",
+      "supercategory": "insect",
+      "keypoints": [
+        "head",
+        "thorax",
+        "abdomen"
+      ],
+      "skeleton": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    }
+  ]
+}
