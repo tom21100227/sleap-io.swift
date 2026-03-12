@@ -27,6 +27,11 @@ final class LazyLoadingTests: XCTestCase {
         return url
     }
 
+    private func tempURL(extension ext: String = "slp") -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("sleap_lazy_\(UUID().uuidString).\(ext)")
+    }
+
     // MARK: - Helpers for in-memory lazy simulation
 
     /// Creates a mock lazy Labels for testing mutation guards without HDF5.
@@ -359,6 +364,50 @@ final class LazyLoadingTests: XCTestCase {
             Instance(skeleton: skeleton),
         ])
         XCTAssertNoThrow(try labels.addFrame(newFrame))
+    }
+
+    func testLazyLoadPreservesNegativeFramesAcrossSaveRoundTrip() async throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "body")])
+        let video = Video(filename: "negative.mp4")
+
+        let negativeFrame = LabeledFrame(video: video, frameIndex: 7, isNegative: true)
+        let positiveFrame = LabeledFrame(
+            video: video,
+            frameIndex: 8,
+            instances: [Instance(skeleton: skeleton)]
+        )
+
+        let original = Labels(
+            frameStore: EagerFrameStore(frames: [negativeFrame, positiveFrame]),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: []
+        )
+
+        let firstURL = tempURL()
+        let secondURL = tempURL()
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+
+        try await original.save(to: firstURL)
+
+        let lazy = try await Labels.load(from: firstURL)
+        XCTAssertTrue(lazy.isLazy)
+
+        let lazyNegative = try XCTUnwrap(lazy.frame(for: lazy.videos[0], at: 7))
+        let lazyPositive = try XCTUnwrap(lazy.frame(for: lazy.videos[0], at: 8))
+        XCTAssertTrue(lazyNegative.isNegative)
+        XCTAssertFalse(lazyPositive.isNegative)
+
+        try await lazy.save(to: secondURL)
+
+        let eager = try await Labels.loadEager(from: secondURL)
+        let eagerNegative = try XCTUnwrap(eager.frame(for: eager.videos[0], at: 7))
+        let eagerPositive = try XCTUnwrap(eager.frame(for: eager.videos[0], at: 8))
+        XCTAssertTrue(eagerNegative.isNegative)
+        XCTAssertFalse(eagerPositive.isNegative)
     }
 }
 

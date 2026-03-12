@@ -1,4 +1,5 @@
 import XCTest
+import CHDF5
 @testable import SleapIO
 @testable import SleapHDF5
 
@@ -23,6 +24,63 @@ final class SLPReaderTests: XCTestCase {
         guard let url = fixtureURL(name) else {
             throw XCTSkip("Fixture '\(name)' not found — generate fixtures first")
         }
+        return url
+    }
+
+    private func tempURL(extension ext: String = "slp") -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("sleap_reader_\(UUID().uuidString).\(ext)")
+    }
+
+    private func makeSparseVideoIDFixture() throws -> URL {
+        let url = tempURL()
+
+        let file = try HDF5File.create(path: url.path)
+        let metadata = try file.createGroup(name: "metadata")
+        try metadata.writeFloatAttribute(name: "format_id", value: 1.5)
+        try metadata.writeStringAttribute(
+            name: "json",
+            value: #"{"nodes":[],"provenance":{},"skeletons":[]}"#
+        )
+        try file.writeVLenStringDataset(
+            name: "videos_json",
+            strings: [
+                #"{"id":10,"backend":{"filename":"video_a.mp4","type":"media"}}"#,
+                #"{"id":20,"backend":{"filename":"video_b.mp4","type":"media"}}"#,
+            ]
+        )
+
+        let compType = try HDF5Datatype.createCompound(size: 36)
+        try compType.insertField(name: "frame_id", offset: 0, type: shim_H5T_NATIVE_UINT64())
+        try compType.insertField(name: "video", offset: 8, type: shim_H5T_NATIVE_UINT32())
+        try compType.insertField(name: "frame_idx", offset: 12, type: shim_H5T_NATIVE_UINT64())
+        try compType.insertField(name: "instance_id_start", offset: 20, type: shim_H5T_NATIVE_UINT64())
+        try compType.insertField(name: "instance_id_end", offset: 28, type: shim_H5T_NATIVE_UINT64())
+
+        let space = try HDF5Dataspace.create(dims: [2])
+        let frames = try file.createDataset(name: "frames", type: compType, space: space)
+
+        var buffer = Data(count: 2 * 36)
+        buffer.withUnsafeMutableBytes { ptr in
+            let base = ptr.baseAddress!
+
+            base.storeBytes(of: UInt64(0), toByteOffset: 0, as: UInt64.self)
+            base.storeBytes(of: UInt32(10), toByteOffset: 8, as: UInt32.self)
+            base.storeBytes(of: UInt64(3), toByteOffset: 12, as: UInt64.self)
+            base.storeBytes(of: UInt64(0), toByteOffset: 20, as: UInt64.self)
+            base.storeBytes(of: UInt64(0), toByteOffset: 28, as: UInt64.self)
+
+            let second = base + 36
+            second.storeBytes(of: UInt64(1), toByteOffset: 0, as: UInt64.self)
+            second.storeBytes(of: UInt32(20), toByteOffset: 8, as: UInt32.self)
+            second.storeBytes(of: UInt64(8), toByteOffset: 12, as: UInt64.self)
+            second.storeBytes(of: UInt64(0), toByteOffset: 20, as: UInt64.self)
+            second.storeBytes(of: UInt64(0), toByteOffset: 28, as: UInt64.self)
+        }
+        try buffer.withUnsafeBytes { ptr in
+            try frames.writeRaw(ptr.baseAddress!, memType: compType.id)
+        }
+
         return url
     }
 
@@ -251,6 +309,23 @@ final class SLPReaderTests: XCTestCase {
         let totalPerVideo = framesV0.count + framesV1.count
         // May be <= labels.count if there are more than 2 videos
         XCTAssertGreaterThan(totalPerVideo, 0)
+    }
+
+    func testSparsePersistedVideoIDsResolveForLazyAndEagerLoads() async throws {
+        let url = try makeSparseVideoIDFixture()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let lazy = try await Labels.load(from: url)
+        XCTAssertEqual(lazy.frames(for: lazy.videos[0]).map(\.frameIndex), [3])
+        XCTAssertEqual(lazy.frames(for: lazy.videos[1]).map(\.frameIndex), [8])
+        XCTAssertTrue(lazy[0].video === lazy.videos[0])
+        XCTAssertTrue(lazy[1].video === lazy.videos[1])
+
+        let eager = try await Labels.loadEager(from: url)
+        XCTAssertEqual(eager.frames(for: eager.videos[0]).map(\.frameIndex), [3])
+        XCTAssertEqual(eager.frames(for: eager.videos[1]).map(\.frameIndex), [8])
+        XCTAssertTrue(eager[0].video === eager.videos[0])
+        XCTAssertTrue(eager[1].video === eager.videos[1])
     }
 
     // MARK: - S06: Embedded frame support

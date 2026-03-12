@@ -232,8 +232,8 @@ public struct SLPWriter {
         let instStarts = rows.map { $0.instStart }
         let instEnds = rows.map { $0.instEnd }
 
-        // Create compound type matching Python's layout
-        let compSize = 5 * 8 // approximate
+        // The compound type size must match the packed row width used below.
+        let compSize = 36
         let compType = try HDF5Datatype.createCompound(size: compSize)
         try compType.insertField(name: "frame_id", offset: 0, type: shim_H5T_NATIVE_UINT64())
         try compType.insertField(name: "video", offset: 8, type: shim_H5T_NATIVE_UINT32())
@@ -275,7 +275,7 @@ public struct SLPWriter {
         // Layout: id(i8), type(u1), frame_id(u8), skeleton(u4), track(i4),
         //         from_predicted(i8), score(f4), point_start(u8), point_end(u8), tracking_score(f4)
         var offset = 0
-        let compType = try HDF5Datatype.createCompound(size: 72) // generous
+        let compType = try HDF5Datatype.createCompound(size: 57)
         try compType.insertField(name: "instance_id", offset: offset, type: shim_H5T_NATIVE_INT64()); offset += 8
         try compType.insertField(name: "instance_type", offset: offset, type: shim_H5T_NATIVE_UINT8()); offset += 1
         // pad to 8
@@ -500,7 +500,7 @@ public struct SLPWriter {
         try file.writeDataset(name: "roi_wkb", data: [UInt8](wkbData), type: shim_H5T_NATIVE_UINT8())
 
         // Write /rois compound dataset
-        let compType = try HDF5Datatype.createCompound(size: 32)
+        let compType = try HDF5Datatype.createCompound(size: 40)
         var offset = 0
         try compType.insertField(name: "annotation_type", offset: offset, type: shim_H5T_NATIVE_UINT8()); offset += 1
         offset = 4
@@ -566,7 +566,7 @@ public struct SLPWriter {
         try file.writeDataset(name: "mask_rle", data: [UInt8](rleData), type: shim_H5T_NATIVE_UINT8())
 
         // Write /masks compound dataset
-        let compType = try HDF5Datatype.createCompound(size: 40)
+        let compType = try HDF5Datatype.createCompound(size: 48)
         var offset = 0
         try compType.insertField(name: "height", offset: offset, type: shim_H5T_NATIVE_UINT32()); offset += 4
         try compType.insertField(name: "width", offset: offset, type: shim_H5T_NATIVE_UINT32()); offset += 4

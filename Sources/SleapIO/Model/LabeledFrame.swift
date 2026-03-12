@@ -63,12 +63,9 @@ public final class LabeledFrame: Hashable, @unchecked Sendable {
         case .auto, .updateTracks:
             // Default: add new predictions, keep existing user instances
             let existingPredicted = Set(predictedInstances.map { ObjectIdentifier($0) })
-            for instance in other.instances {
-                if instance is PredictedInstance {
-                    instances.append(instance)
-                } else if !existingPredicted.contains(ObjectIdentifier(instance)) {
-                    instances.append(instance)
-                }
+            for predicted in other.predictedInstances
+                where !existingPredicted.contains(ObjectIdentifier(predicted)) {
+                instances.append(predicted)
             }
         }
     }

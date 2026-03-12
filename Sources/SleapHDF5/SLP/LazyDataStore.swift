@@ -98,10 +98,14 @@ final class LazyDataStore {
     /// Video ID remap table.
     let videoIdMap: [Int: Int]
 
+    /// Set of "<videoIndex>_<frameIndex>" keys for negative frames.
+    let negativeFrameSet: Set<String>
+
     init(framesData: FrameColumns, instancesData: InstanceColumns,
          pointsData: PointColumns, predPointsData: PredPointColumns,
          videos: [Video], skeletons: [Skeleton], tracks: [Track],
-         formatId: Float, videoIdMap: [Int: Int]) {
+         formatId: Float, videoIdMap: [Int: Int],
+         negativeFrameSet: Set<String>) {
         self.framesData = framesData
         self.instancesData = instancesData
         self.pointsData = pointsData
@@ -111,14 +115,15 @@ final class LazyDataStore {
         self.tracks = tracks
         self.formatId = formatId
         self.videoIdMap = videoIdMap
+        self.negativeFrameSet = negativeFrameSet
     }
 
     /// Materialize a single frame from column data.
     func materializeFrame(at index: Int) -> LabeledFrame {
         let videoRaw = Int(framesData.video[index])
-        let videoIdx = videoIdMap[videoRaw] ?? videoRaw
-        let video = videos[min(videoIdx, videos.count - 1)]
+        let videoIdx = SLPVideoTable.resolvedIndex(for: videoRaw, videoIdMap: videoIdMap, videoCount: videos.count)
         let frameIdx = Int(framesData.frameIdx[index])
+        let video = videoIdx.map { videos[$0] } ?? videos.first ?? Video(filename: "")
 
         let instStart = Int(framesData.instanceIdStart[index])
         let instEnd = Int(framesData.instanceIdEnd[index])
@@ -144,7 +149,8 @@ final class LazyDataStore {
             }
         }
 
-        return LabeledFrame(video: video, frameIndex: frameIdx, instances: instances)
+        let isNegative = videoIdx.map { negativeFrameSet.contains("\($0)_\(frameIdx)") } ?? false
+        return LabeledFrame(video: video, frameIndex: frameIdx, instances: instances, isNegative: isNegative)
     }
 
     /// Materialize a single instance from column data.

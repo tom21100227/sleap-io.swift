@@ -1,4 +1,5 @@
 import XCTest
+import simd
 @testable import SleapIO
 @testable import SleapHDF5
 
@@ -26,6 +27,61 @@ final class SLPWriterTests: XCTestCase {
     private func tempURL(extension ext: String = "slp") -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("sleap_test_\(UUID().uuidString).\(ext)")
+    }
+
+    private func makeWriterRegressionLabels() -> Labels {
+        let skeleton = Skeleton(name: "fly", nodes: [
+            Node(name: "head"),
+            Node(name: "tail"),
+        ])
+        let video = Video(filename: "writer.mp4")
+        let track = Track(name: "track_0")
+
+        let user0 = Instance(
+            skeleton: skeleton,
+            points: PointsArray(points: [
+                Point(x: 10, y: 20, visible: true, complete: true),
+                Point(x: 30, y: 40, visible: true, complete: true),
+            ]),
+            track: track
+        )
+        let predicted0 = PredictedInstance(
+            skeleton: skeleton,
+            points: PredictedPointsArray(points: [
+                PredictedPoint(x: 11, y: 21, visible: true, complete: true, score: 0.8),
+                PredictedPoint(x: 31, y: 41, visible: true, complete: true, score: 0.7),
+            ]),
+            score: 0.95,
+            track: track
+        )
+        let user1 = Instance(
+            skeleton: skeleton,
+            points: PointsArray(points: [
+                Point(x: 50, y: 60, visible: true, complete: true),
+                Point(x: 70, y: 80, visible: true, complete: true),
+            ]),
+            track: track
+        )
+        let user2 = Instance(
+            skeleton: skeleton,
+            points: PointsArray(points: [
+                Point(x: 90, y: 100, visible: true, complete: true),
+                Point(x: 110, y: 120, visible: true, complete: true),
+            ]),
+            track: track
+        )
+
+        let frames = [
+            LabeledFrame(video: video, frameIndex: 3, instances: [user0, predicted0]),
+            LabeledFrame(video: video, frameIndex: 9, instances: [user1, user2]),
+        ]
+
+        return Labels(
+            frameStore: EagerFrameStore(frames: frames),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: [track]
+        )
     }
 
     // MARK: - S04: SLP round-trip fidelity
@@ -310,5 +366,60 @@ final class SLPWriterTests: XCTestCase {
         XCTAssertEqual(labels.count, labels2.count)
         XCTAssertEqual(labels.videos.count, labels2.videos.count)
         XCTAssertEqual(labels.skeletons.count, labels2.skeletons.count)
+    }
+
+    func testWriterRoundTripPreservesFrameAndInstanceRanges() async throws {
+        let labels = makeWriterRegressionLabels()
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        try await labels.save(to: outputURL)
+
+        let reloaded = try await Labels.loadEager(from: outputURL)
+        XCTAssertEqual(reloaded.count, 2)
+        XCTAssertEqual(reloaded[0].frameIndex, 3)
+        XCTAssertEqual(reloaded[1].frameIndex, 9)
+        XCTAssertEqual(reloaded[0].instances.count, 2)
+        XCTAssertEqual(reloaded[1].instances.count, 2)
+        XCTAssertEqual(reloaded[0].predictedInstances.count, 1)
+        XCTAssertEqual(reloaded[1].instances[1].points[1].x, 110, accuracy: 1e-3)
+        XCTAssertEqual(reloaded[1].instances[1].points[1].y, 120, accuracy: 1e-3)
+    }
+
+    func testWriterRoundTripSupportsROIsAndMasks() async throws {
+        let labels = makeWriterRegressionLabels()
+        var roi = ROI(
+            annotationType: .polygon,
+            name: "arena",
+            points: [
+                SIMD2<Float>(0, 0),
+                SIMD2<Float>(10, 0),
+                SIMD2<Float>(10, 10),
+                SIMD2<Float>(0, 10),
+            ]
+        )
+        roi.videoIndex = 0
+        roi.frameIndex = 3
+        roi.score = 0.75
+
+        var mask = SegmentationMask(rleCounts: [3, 2, 5], height: 2, width: 5, name: "animal")
+        mask.videoIndex = 0
+        mask.frameIndex = 9
+        mask.score = 0.5
+
+        labels.rois = [roi]
+        labels.masks = [mask]
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        try await labels.save(to: outputURL)
+
+        let reloaded = try await Labels.loadEager(from: outputURL)
+        XCTAssertEqual(reloaded.rois.count, 1)
+        XCTAssertEqual(reloaded.masks.count, 1)
+        XCTAssertEqual(reloaded.rois[0].frameIndex, 3)
+        XCTAssertEqual(reloaded.masks[0].frameIndex, 9)
+        XCTAssertEqual(reloaded.masks[0].rleCounts, [3, 2, 5])
     }
 }

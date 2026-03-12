@@ -93,14 +93,20 @@ extension SLPReader {
 
         // 2. Read tracks & videos (always eager — small)
         let tracks = try readTracksInternal(from: file)
-        let videos = try readVideosInternal(from: file)
-        let videoIdMap = buildVideoIdMapInternal(videos: videos)
+        let (videos, videoIdMap) = try SLPVideoTable.readVideosAndIdMap(from: file)
 
         // 3. Read column arrays (the bulk data — kept as raw arrays)
         let framesData = try readFrameColumns(from: file)
         let instancesData = try readInstanceColumns(from: file, formatId: formatId)
         let pointsData = try readPointColumns(from: file, name: "points")
         let predPointsData = try readPredPointColumns(from: file)
+        try SLPVideoTable.validateReferencedVideoIDs(
+            framesData.video,
+            videoIdMap: videoIdMap,
+            videoCount: videos.count
+        )
+
+        let negativeFrameSet = try readNegativeFrameSet(from: file, videoIdMap: videoIdMap, videoCount: videos.count)
 
         // 4. Create lazy store and frame list
         let store = LazyDataStore(
@@ -112,7 +118,8 @@ extension SLPReader {
             skeletons: skeletons,
             tracks: tracks,
             formatId: formatId,
-            videoIdMap: videoIdMap
+            videoIdMap: videoIdMap,
+            negativeFrameSet: negativeFrameSet
         )
 
         let frameList = LazyFrameList(store: store)
@@ -122,10 +129,6 @@ extension SLPReader {
         let sessions = try readSessionsInternal(from: file, videos: videos, videoIdMap: videoIdMap)
         let rois = try readROIsInternal(from: file, formatId: formatId)
         let masks = try readMasksInternal(from: file, formatId: formatId)
-
-        // 6. Mark negative frames (stored as indices, applied during materialization or eagerly here)
-        // For lazy mode, we note which frames are negative and apply when materializing
-        _ = try readNegativeFrameSet(from: file, videoIdMap: videoIdMap)
 
         return Labels(
             frameStore: frameList,
@@ -213,7 +216,11 @@ extension SLPReader {
         )
     }
 
-    private static func readNegativeFrameSet(from file: HDF5File, videoIdMap: [Int: Int]) throws -> Set<String> {
+    private static func readNegativeFrameSet(
+        from file: HDF5File,
+        videoIdMap: [Int: Int],
+        videoCount: Int
+    ) throws -> Set<String> {
         guard file.exists(name: "negative_frames") else { return [] }
         let ds = try file.openDataset(name: "negative_frames")
         let count = ds.count
@@ -224,7 +231,13 @@ extension SLPReader {
 
         var result = Set<String>()
         for i in 0..<count {
-            let vidIdx = videoIdMap[Int(videoIds[i])] ?? Int(videoIds[i])
+            guard let vidIdx = SLPVideoTable.resolvedIndex(
+                for: Int(videoIds[i]),
+                videoIdMap: videoIdMap,
+                videoCount: videoCount
+            ) else {
+                continue
+            }
             result.insert("\(vidIdx)_\(frameIdxs[i])")
         }
         return result
@@ -247,30 +260,6 @@ extension SLPReader {
         }
     }
 
-    private static func readVideosInternal(from file: HDF5File) throws -> [Video] {
-        guard file.exists(name: "videos_json") else { return [] }
-        let ds = try file.openDataset(name: "videos_json")
-        let strings = try ds.readVLenStrings()
-        return try strings.map { str in
-            guard let data = str.data(using: .utf8),
-                  let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw SleapIOError.corruptData("Invalid video JSON: \(str)")
-            }
-            let backend = dict["backend"] as? [String: Any] ?? [:]
-            let filename = backend["filename"] as? String ?? dict["filename"] as? String ?? ""
-            var backendType = "media"
-            if let bt = backend["type"] as? String { backendType = bt }
-            else if filename == "." { backendType = "hdf5" }
-            return Video(filename: filename, backendType: backendType, backendMetadata: backend)
-        }
-    }
-
-    private static func buildVideoIdMapInternal(videos: [Video]) -> [Int: Int] {
-        var map: [Int: Int] = [:]
-        for i in 0..<videos.count { map[i] = i }
-        return map
-    }
-
     private static func readSuggestionsInternal(
         from file: HDF5File, videos: [Video], videoIdMap: [Int: Int]
     ) throws -> [SuggestionFrame] {
@@ -284,8 +273,13 @@ extension SLPReader {
             let videoIdx = dict["video"] as? Int ?? 0
             let frameIdx = dict["frame_idx"] as? Int ?? 0
             let group = dict["group"] as? String
-            let resolvedIdx = videoIdMap[videoIdx] ?? videoIdx
-            guard resolvedIdx >= 0 && resolvedIdx < videos.count else { continue }
+            guard let resolvedIdx = SLPVideoTable.resolvedIndex(
+                for: videoIdx,
+                videoIdMap: videoIdMap,
+                videoCount: videos.count
+            ) else {
+                continue
+            }
             suggestions.append(SuggestionFrame(video: videos[resolvedIdx], frameIndex: frameIdx, group: group))
         }
         return suggestions
@@ -307,10 +301,14 @@ extension SLPReader {
                     let camName = cv["camera_name"] as? String ?? "camera"
                     let videoIdx = cv["video_idx"] as? Int ?? 0
                     let camera = Camera(name: camName)
-                    let resolvedIdx = videoIdMap[videoIdx] ?? videoIdx
-                    if resolvedIdx >= 0 && resolvedIdx < videos.count {
-                        session.cameraToVideo[camera] = videos[resolvedIdx]
+                    guard let resolvedIdx = SLPVideoTable.resolvedIndex(
+                        for: videoIdx,
+                        videoIdMap: videoIdMap,
+                        videoCount: videos.count
+                    ) else {
+                        continue
                     }
+                    session.cameraToVideo[camera] = videos[resolvedIdx]
                 }
             }
             sessions.append(session)

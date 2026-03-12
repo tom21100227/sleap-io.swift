@@ -40,10 +40,7 @@ public struct SLPReader {
         let tracks = try readTracks(from: file)
 
         // 3. Read videos
-        let videos = try readVideos(from: file)
-
-        // Build video ID remap table (video indices in /frames may be sparse)
-        let videoIdMap = buildVideoIdMap(videos: videos)
+        let (videos, videoIdMap) = try SLPVideoTable.readVideosAndIdMap(from: file)
 
         // 4. Read points
         let (pointsX, pointsY, pointsVisible, pointsComplete) = try readPoints(
@@ -57,6 +54,11 @@ public struct SLPReader {
 
         // 7. Read frames
         let frameData = try readFrames(from: file)
+        try SLPVideoTable.validateReferencedVideoIDs(
+            frameData.map(\.video),
+            videoIdMap: videoIdMap,
+            videoCount: videos.count
+        )
 
         // 8. Build object graph
         let allInstances = try buildInstances(
@@ -132,53 +134,6 @@ public struct SLPReader {
             }
             return Track(name: name)
         }
-    }
-
-    // MARK: - Read videos
-
-    private static func readVideos(from file: HDF5File) throws -> [Video] {
-        guard file.exists(name: "videos_json") else { return [] }
-        let ds = try file.openDataset(name: "videos_json")
-        let strings = try ds.readVLenStrings()
-        return try strings.map { str in
-            guard let data = str.data(using: .utf8),
-                  let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw SleapIOError.corruptData("Invalid video JSON: \(str)")
-            }
-            return decodeVideo(from: dict)
-        }
-    }
-
-    private static func decodeVideo(from dict: [String: Any]) -> Video {
-        let backend = dict["backend"] as? [String: Any] ?? [:]
-        let filename: String
-        if let fn = backend["filename"] as? String {
-            filename = fn
-        } else if let fn = dict["filename"] as? String {
-            filename = fn
-        } else {
-            filename = ""
-        }
-
-        var backendType = "media"
-        if let bt = backend["type"] as? String {
-            backendType = bt
-        } else if filename == "." {
-            backendType = "hdf5"
-        }
-
-        return Video(filename: filename, backendType: backendType, backendMetadata: backend)
-    }
-
-    // MARK: - Build video ID map
-
-    private static func buildVideoIdMap(videos: [Video]) -> [Int: Int] {
-        // Identity map — video indices in the dataset reference array positions
-        var map: [Int: Int] = [:]
-        for i in 0..<videos.count {
-            map[i] = i
-        }
-        return map
     }
 
     // MARK: - Read points
@@ -402,8 +357,13 @@ public struct SLPReader {
         frames.reserveCapacity(frameData.count)
 
         for row in frameData {
-            let videoIdx = videoIdMap[row.video] ?? row.video
-            guard videoIdx >= 0 && videoIdx < videos.count else { continue }
+            guard let videoIdx = SLPVideoTable.resolvedIndex(
+                for: row.video,
+                videoIdMap: videoIdMap,
+                videoCount: videos.count
+            ) else {
+                continue
+            }
 
             let video = videos[videoIdx]
             let start = Int(row.instanceIdStart)
@@ -451,8 +411,13 @@ public struct SLPReader {
             let frameIdx = dict["frame_idx"] as? Int ?? 0
             let group = dict["group"] as? String
 
-            let resolvedIdx = videoIdMap[videoIdx] ?? videoIdx
-            guard resolvedIdx >= 0 && resolvedIdx < videos.count else { continue }
+            guard let resolvedIdx = SLPVideoTable.resolvedIndex(
+                for: videoIdx,
+                videoIdMap: videoIdMap,
+                videoCount: videos.count
+            ) else {
+                continue
+            }
 
             suggestions.append(SuggestionFrame(
                 video: videos[resolvedIdx],
@@ -480,7 +445,13 @@ public struct SLPReader {
         // Build lookup set
         var negativeSet = Set<String>()
         for i in 0..<count {
-            let vidIdx = videoIdMap[Int(videoIds[i])] ?? Int(videoIds[i])
+            guard let vidIdx = SLPVideoTable.resolvedIndex(
+                for: Int(videoIds[i]),
+                videoIdMap: videoIdMap,
+                videoCount: videos.count
+            ) else {
+                continue
+            }
             negativeSet.insert("\(vidIdx)_\(frameIdxs[i])")
         }
 
@@ -516,10 +487,14 @@ public struct SLPReader {
                     let camName = cv["camera_name"] as? String ?? "camera"
                     let videoIdx = cv["video_idx"] as? Int ?? 0
                     let camera = Camera(name: camName)
-                    let resolvedIdx = videoIdMap[videoIdx] ?? videoIdx
-                    if resolvedIdx >= 0 && resolvedIdx < videos.count {
-                        session.cameraToVideo[camera] = videos[resolvedIdx]
+                    guard let resolvedIdx = SLPVideoTable.resolvedIndex(
+                        for: videoIdx,
+                        videoIdMap: videoIdMap,
+                        videoCount: videos.count
+                    ) else {
+                        continue
                     }
+                    session.cameraToVideo[camera] = videos[resolvedIdx]
                 }
             }
 
