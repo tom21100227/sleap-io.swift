@@ -1,0 +1,33 @@
+{
+  "frame_count": 5,
+  "track_count": 2,
+  "node_count": 3,
+  "track_names": [
+    "animal_0",
+    "animal_1"
+  ],
+  "node_names": [
+    "head",
+    "thorax",
+    "tail"
+  ],
+  "has_scores": false,
+  "track1_present_frames": [
+    0,
+    2,
+    4
+  ],
+  "track1_absent_frames": [
+    1,
+    3
+  ],
+  "occupancy_frame1": [
+    true,
+    false
+  ],
+  "occupancy_frame2": [
+    true,
+    true
+  ],
+  "locations_frame1_track1_is_nan": true
+}

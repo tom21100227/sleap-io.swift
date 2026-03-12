@@ -13,6 +13,10 @@ let package = Package(
         .library(name: "SleapHDF5", targets: ["SleapHDF5"]),
         .library(name: "SleapVideo", targets: ["SleapVideo"]),
         .library(name: "SleapRendering", targets: ["SleapRendering"]),
+        .executable(name: "sleapio", targets: ["SleapCLI"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
     ],
     targets: [
         // C shim for libhdf5 — exposes HDF5 macros as inline functions
@@ -48,6 +52,16 @@ let package = Package(
             dependencies: ["SleapIO", "SleapVideo"]
         ),
 
+        // CLI executable
+        .executableTarget(
+            name: "SleapCLI",
+            dependencies: [
+                "SleapHDF5",
+                "SleapIO",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
+
         // Tests
         .testTarget(
             name: "SleapIOTests",
@@ -64,6 +78,10 @@ let package = Package(
         .testTarget(
             name: "SleapRenderingTests",
             dependencies: ["SleapRendering", "SleapIO", "SleapVideo"]
+        ),
+        .testTarget(
+            name: "SleapCLITests",
+            dependencies: ["SleapIO"]
         ),
     ]
 )

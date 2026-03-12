@@ -1,0 +1,41 @@
+{
+  "frame_count": 5,
+  "individual_count": 1,
+  "bodypart_count": 3,
+  "bodyparts": [
+    "head",
+    "body",
+    "tail"
+  ],
+  "scorer": "DLC_resnet50",
+  "has_individuals": false,
+  "likelihood_value": 0.95,
+  "coords_frame0": [
+    [
+      100.0,
+      200.0
+    ],
+    [
+      150.0,
+      250.0
+    ],
+    [
+      200.0,
+      300.0
+    ]
+  ],
+  "coords_frame4": [
+    [
+      120.0,
+      220.0
+    ],
+    [
+      170.0,
+      270.0
+    ],
+    [
+      220.0,
+      320.0
+    ]
+  ]
+}

@@ -27,7 +27,12 @@ extension Labels {
             throw SleapIOError.unsupportedFormat(
                 "YOLO import requires an explicit config. Use YOLOCodec.read(from:config:).")
         case .analysisHDF5:
-            throw SleapIOError.unsupportedFormat("Analysis HDF5 is planned for Phase 4")
+            return try AnalysisHDF5Codec.read(from: url.path)
+        case .jabs:
+            throw SleapIOError.unsupportedFormat(
+                "JABS import requires node names configuration. Use JABSCodec.read(from:config:).")
+        case .deepLabCut:
+            return try DLCCodec.read(from: url.path)
         }
     }
 
@@ -52,7 +57,12 @@ extension Labels {
             throw SleapIOError.unsupportedFormat(
                 "YOLO import requires an explicit config. Use YOLOCodec.read(from:config:).")
         case .analysisHDF5:
-            throw SleapIOError.unsupportedFormat("Analysis HDF5 is planned for Phase 4")
+            return try AnalysisHDF5Codec.read(from: url.path)
+        case .jabs:
+            throw SleapIOError.unsupportedFormat(
+                "JABS import requires node names configuration. Use JABSCodec.read(from:config:).")
+        case .deepLabCut:
+            return try DLCCodec.read(from: url.path)
         }
     }
 
@@ -78,12 +88,18 @@ extension Labels {
         case .alphaTracker:
             throw SleapIOError.unsupportedFormat("AlphaTracker export is not supported")
         case .analysisHDF5:
-            throw SleapIOError.unsupportedFormat("Analysis HDF5 is planned for Phase 4")
+            try AnalysisHDF5Codec.write(self, to: url.path)
+        case .jabs:
+            throw SleapIOError.unsupportedFormat(
+                "JABS export requires node names configuration. Use JABSCodec.write(_:to:config:).")
+        case .deepLabCut:
+            throw SleapIOError.unsupportedFormat(
+                "DeepLabCut format is read-only. Export to DLC HDF5 is not supported.")
         }
     }
 
     /// Infer input format from a URL.
-    private static func inferLoadFormat(from url: URL) throws -> FileFormat {
+    public static func inferLoadFormat(from url: URL) throws -> FileFormat {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
             throw SleapIOError.fileNotFound("File not found: \(url.path)")
@@ -106,7 +122,7 @@ extension Labels {
         case "json":
             return try sniffJSONFormat(from: url)
         case "h5", "hdf5":
-            return .analysisHDF5
+            return try sniffHDF5Format(from: url)
         default:
             throw SleapIOError.unsupportedFormat(
                 "Unsupported file extension '\(url.pathExtension)' at \(url.path)")
@@ -114,7 +130,7 @@ extension Labels {
     }
 
     /// Infer output format from URL extension.
-    private static func inferSaveFormat(from url: URL) throws -> FileFormat {
+    public static func inferSaveFormat(from url: URL) throws -> FileFormat {
         switch url.pathExtension.lowercased() {
         case "slp":
             return .slp
@@ -123,11 +139,48 @@ extension Labels {
         case "json":
             return .cocoJSON
         case "h5", "hdf5":
-            return .analysisHDF5
+            throw SleapIOError.unsupportedFormat(
+                "Ambiguous .h5 output format. Use --output-format to specify one of: analysis_h5, jabs, dlc")
         default:
             throw SleapIOError.unsupportedFormat(
                 "Unsupported output extension '\(url.pathExtension)' at \(url.path)")
         }
+    }
+
+    /// Sniff an HDF5 file to determine its schema format.
+    ///
+    /// Checks for known markers in priority order:
+    /// 1. Analysis HDF5: `node_names` + `locations` datasets
+    /// 2. JABS: `poseest` group
+    /// 3. DeepLabCut: `df_with_missing` group
+    static func sniffHDF5Format(from url: URL) throws -> FileFormat {
+        let file: HDF5File
+        do {
+            file = try HDF5File.openReadOnly(path: url.path)
+        } catch {
+            if !FileManager.default.fileExists(atPath: url.path) {
+                throw SleapIOError.fileNotFound("File not found: \(url.path)")
+            }
+            throw SleapIOError.corruptData("Cannot open HDF5 file: \(url.path)")
+        }
+
+        // Check for Analysis HDF5 markers
+        if file.exists(name: "node_names") && file.exists(name: "locations") {
+            return .analysisHDF5
+        }
+
+        // Check for JABS markers
+        if file.exists(name: "poseest") {
+            return .jabs
+        }
+
+        // Check for DLC markers
+        if file.exists(name: "df_with_missing") {
+            return .deepLabCut
+        }
+
+        throw SleapIOError.unsupportedFormat(
+            "Unrecognized HDF5 schema in \(url.path). Expected analysis HDF5 (node_names + locations), JABS (poseest), or DLC (df_with_missing).")
     }
 
     /// Detect the supported JSON schema for load dispatch.

@@ -1,0 +1,16 @@
+{
+  "frame_count": 3,
+  "track_count": 2,
+  "node_count": 3,
+  "track_names": [
+    "animal_0",
+    "animal_1"
+  ],
+  "node_names": [
+    "head",
+    "thorax",
+    "tail"
+  ],
+  "video_path": "test_video.mp4",
+  "labels_path": "test_labels.slp"
+}

@@ -1,0 +1,87 @@
+{
+  "frame_count": 3,
+  "track_count": 2,
+  "node_count": 3,
+  "track_names": [
+    "animal_0",
+    "animal_1"
+  ],
+  "node_names": [
+    "head",
+    "thorax",
+    "tail"
+  ],
+  "edge_names": [
+    "head,thorax",
+    "thorax,tail"
+  ],
+  "edge_inds": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      2
+    ]
+  ],
+  "video_path": "test_video.mp4",
+  "has_scores": false,
+  "all_tracks_present": true,
+  "locations_frame0_track0": [
+    [
+      100.0,
+      200.0
+    ],
+    [
+      150.0,
+      250.0
+    ],
+    [
+      200.0,
+      300.0
+    ]
+  ],
+  "locations_frame0_track1": [
+    [
+      300.0,
+      400.0
+    ],
+    [
+      350.0,
+      450.0
+    ],
+    [
+      400.0,
+      500.0
+    ]
+  ],
+  "locations_frame2_track0": [
+    [
+      120.0,
+      220.0
+    ],
+    [
+      170.0,
+      270.0
+    ],
+    [
+      220.0,
+      320.0
+    ]
+  ],
+  "locations_frame2_track1": [
+    [
+      320.0,
+      420.0
+    ],
+    [
+      370.0,
+      470.0
+    ],
+    [
+      420.0,
+      520.0
+    ]
+  ]
+}

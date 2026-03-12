@@ -1,0 +1,5 @@
+{
+  "error": "locations_wrong_shape",
+  "locations_ndim": 3,
+  "expected_ndim": 4
+}

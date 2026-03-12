@@ -1,0 +1,49 @@
+{
+  "frame_count": 5,
+  "animal_count": 1,
+  "node_count": 4,
+  "node_names": [
+    "nose",
+    "left_ear",
+    "right_ear",
+    "tail_base"
+  ],
+  "has_node_names": true,
+  "confidence_value": 0.9,
+  "points_frame0": [
+    [
+      100.0,
+      200.0
+    ],
+    [
+      120.0,
+      180.0
+    ],
+    [
+      80.0,
+      180.0
+    ],
+    [
+      100.0,
+      350.0
+    ]
+  ],
+  "points_frame4": [
+    [
+      120.0,
+      220.0
+    ],
+    [
+      140.0,
+      200.0
+    ],
+    [
+      100.0,
+      200.0
+    ],
+    [
+      120.0,
+      370.0
+    ]
+  ]
+}

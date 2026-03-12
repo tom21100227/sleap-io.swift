@@ -1,0 +1,26 @@
+{
+  "frame_count": 5,
+  "individual_count": 2,
+  "bodypart_count": 3,
+  "bodyparts": [
+    "head",
+    "body",
+    "tail"
+  ],
+  "individuals": [
+    "mouse1",
+    "mouse2"
+  ],
+  "scorer": "DLC_resnet50",
+  "has_individuals": true,
+  "likelihood_value": 0.95,
+  "mouse2_absent_frames": [
+    3,
+    4
+  ],
+  "mouse2_present_frames": [
+    0,
+    1,
+    2
+  ]
+}

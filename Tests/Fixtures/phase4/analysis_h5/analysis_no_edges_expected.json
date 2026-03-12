@@ -1,0 +1,15 @@
+{
+  "frame_count": 3,
+  "track_count": 1,
+  "node_count": 3,
+  "track_names": [
+    "animal_0"
+  ],
+  "node_names": [
+    "head",
+    "thorax",
+    "tail"
+  ],
+  "has_edges": false,
+  "has_scores": false
+}

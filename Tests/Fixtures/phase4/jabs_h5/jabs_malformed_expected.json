@@ -1,0 +1,5 @@
+{
+  "error": "points_wrong_shape",
+  "points_ndim": 2,
+  "expected_ndim": 4
+}

@@ -1,0 +1,20 @@
+{
+  "frame_count": 3,
+  "track_count": 2,
+  "node_count": 3,
+  "track_names": [
+    "animal_0",
+    "animal_1"
+  ],
+  "node_names": [
+    "head",
+    "thorax",
+    "tail"
+  ],
+  "has_scores": true,
+  "point_scores_value": 0.9,
+  "instance_scores_track0": 0.85,
+  "instance_scores_track1": 0.75,
+  "tracking_scores_track0": 0.95,
+  "tracking_scores_track1": 0.8
+}

@@ -21,6 +21,8 @@ public enum FileFormat: Sendable {
     case yolo
     case alphaTracker
     case analysisHDF5
+    case jabs
+    case deepLabCut
 }
 
 /// Options controlling save behavior.
