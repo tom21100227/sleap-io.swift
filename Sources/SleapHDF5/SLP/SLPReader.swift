@@ -41,6 +41,7 @@ public struct SLPReader {
 
         // 3. Read videos
         let (videos, videoIdMap) = try SLPVideoTable.readVideosAndIdMap(from: file)
+        try SLPVideoTable.configureBackends(for: videos, filePath: file.path, formatId: formatId)
 
         // 4. Read points
         let (pointsX, pointsY, pointsVisible, pointsComplete) = try readPoints(

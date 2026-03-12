@@ -94,6 +94,7 @@ extension SLPReader {
         // 2. Read tracks & videos (always eager — small)
         let tracks = try readTracksInternal(from: file)
         let (videos, videoIdMap) = try SLPVideoTable.readVideosAndIdMap(from: file)
+        try SLPVideoTable.configureBackends(for: videos, filePath: file.path, formatId: formatId)
 
         // 3. Read column arrays (the bulk data — kept as raw arrays)
         let framesData = try readFrameColumns(from: file)

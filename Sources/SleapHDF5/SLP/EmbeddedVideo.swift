@@ -10,7 +10,7 @@ public struct EmbeddedVideo {
     /// Read embedded video frames from an SLP file.
     /// Returns a map from source frame index to decoded CGImage.
     static func readFrames(from file: HDF5File, videoGroupName: String,
-                                  formatId: Float) throws -> (frames: [Int: Data], format: String, channelOrder: String) {
+                                  formatId: Float) throws -> (frames: [Int: Data], format: String, channelOrder: String, frameSize: (height: Int, width: Int, channels: Int)?, sourceVideoJSON: String) {
         let group = try file.openGroup(name: videoGroupName)
 
         // Read the video dataset
@@ -32,6 +32,22 @@ public struct EmbeddedVideo {
             channelOrder = "BGR" // default for pre-1.4
         }
 
+        let shape = videoDs.shape
+        let frameSize: (height: Int, width: Int, channels: Int)?
+        if shape.count == 4 {
+            frameSize = (height: shape[1], width: shape[2], channels: shape[3])
+        } else {
+            frameSize = nil
+        }
+
+        let sourceVideoJSON: String
+        if group.exists(name: "source_video") {
+            let sourceVideoGroup = try group.openGroup(name: "source_video")
+            sourceVideoJSON = try sourceVideoGroup.readStringAttribute(name: "json")
+        } else {
+            sourceVideoJSON = "{}"
+        }
+
         // Read frame numbers mapping (dataset row index -> source frame index)
         let frameNumbers: [Int]
         if group.exists(name: "frame_numbers") {
@@ -49,7 +65,6 @@ public struct EmbeddedVideo {
             // Raw array format: rank-4 uint8 (N, H, W, C)
             // Read entire dataset as uint8
             let raw = try videoDs.readUInt8()
-            let shape = videoDs.shape
             guard shape.count == 4 else {
                 throw SleapIOError.corruptData("Expected rank-4 dataset for raw video, got rank \(shape.count)")
             }
@@ -70,7 +85,7 @@ public struct EmbeddedVideo {
             }
         }
 
-        return (result, format, channelOrder)
+        return (result, format, channelOrder, frameSize, sourceVideoJSON)
     }
 
     /// Write embedded frames to an SLP file.

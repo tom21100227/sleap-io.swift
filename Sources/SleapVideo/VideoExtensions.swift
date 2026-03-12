@@ -5,32 +5,78 @@ import SleapIO
 /// Storage for video backends, keyed by Video identity.
 ///
 /// Since Video is defined in SleapIO (another module), we can't add stored
-/// properties. We use a global dictionary keyed by ObjectIdentifier instead.
+/// properties. We use weak-key global tables keyed by Video object identity.
 private let _backendLock = NSLock()
-private var _backends: [ObjectIdentifier: any VideoBackend] = [:]
-private var _caches: [ObjectIdentifier: FrameCache] = [:]
+private let _backends = NSMapTable<AnyObject, BackendBox>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+private let _caches = NSMapTable<AnyObject, CacheBox>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+private let _backendOpeners = NSMapTable<AnyObject, OpenerBox>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+
+private final class BackendBox: NSObject {
+    let backend: any VideoBackend
+
+    init(_ backend: any VideoBackend) {
+        self.backend = backend
+    }
+}
+
+private final class CacheBox: NSObject {
+    let cache: FrameCache
+
+    init(_ cache: FrameCache) {
+        self.cache = cache
+    }
+}
+
+private final class OpenerBox: NSObject {
+    let opener: @Sendable () async throws -> any VideoBackend
+
+    init(_ opener: @escaping @Sendable () async throws -> any VideoBackend) {
+        self.opener = opener
+    }
+}
 
 extension Video {
     /// The active video backend. Set by `open()` or manually for custom backends.
     public var backend: (any VideoBackend)? {
         get {
             _backendLock.withLock {
-                _backends[ObjectIdentifier(self)]
+                _backends.object(forKey: self)?.backend
             }
         }
         set {
             _backendLock.withLock {
-                _backends[ObjectIdentifier(self)] = newValue
+                if let newValue {
+                    _backends.setObject(BackendBox(newValue), forKey: self)
+                } else {
+                    _backends.removeObject(forKey: self)
+                }
+            }
+        }
+    }
+
+    /// Optional custom opener for backends that need module-specific setup.
+    public var backendOpener: (@Sendable () async throws -> any VideoBackend)? {
+        get {
+            _backendLock.withLock {
+                _backendOpeners.object(forKey: self)?.opener
+            }
+        }
+        set {
+            _backendLock.withLock {
+                if let newValue {
+                    _backendOpeners.setObject(OpenerBox(newValue), forKey: self)
+                } else {
+                    _backendOpeners.removeObject(forKey: self)
+                }
             }
         }
     }
 
     private var frameCache: FrameCache {
         _backendLock.withLock {
-            let key = ObjectIdentifier(self)
-            if let existing = _caches[key] { return existing }
+            if let existing = _caches.object(forKey: self)?.cache { return existing }
             let cache = FrameCache()
-            _caches[key] = cache
+            _caches.setObject(CacheBox(cache), forKey: self)
             return cache
         }
     }
@@ -40,30 +86,29 @@ extension Video {
     /// - "media": AVFoundation backend for video files
     /// - "imageSequence": Image directory backend
     public func open() async throws {
-        switch backendType {
-        case "media", "MediaVideo":
-            let url = URL(fileURLWithPath: filename)
-            backend = try await AVFoundationBackend(url: url)
-        case "imageSequence", "ImageVideo":
-            let url = URL(fileURLWithPath: filename)
-            backend = try ImageSequenceBackend(directory: url)
-        default:
-            throw SleapIOError.videoError("Unknown backend type: \(backendType)")
+        if let opener = backendOpener {
+            backend = try await opener()
+        } else {
+            switch backendType {
+            case "media", "MediaVideo":
+                let url = URL(fileURLWithPath: filename)
+                backend = try await AVFoundationBackend(url: url)
+            case "imageSequence", "ImageVideo":
+                let url = URL(fileURLWithPath: filename)
+                backend = try ImageSequenceBackend(directory: url)
+            default:
+                throw SleapIOError.videoError("Unknown backend type: \(backendType)")
+            }
         }
 
-        // Sync properties from backend
-        if let be = backend {
-            if frameCount == nil { frameCount = be.frameCount }
-            if frameSize == nil { frameSize = be.frameSize }
-        }
+        syncMetadataFromBackend()
     }
 
     /// Close the backend and release resources.
     public func close() {
         _backendLock.withLock {
-            let key = ObjectIdentifier(self)
-            _backends.removeValue(forKey: key)
-            _caches.removeValue(forKey: key)
+            _backends.removeObject(forKey: self)
+            _caches.removeObject(forKey: self)
         }
     }
 
@@ -83,15 +128,41 @@ extension Video {
 
     /// Extract a range of frames.
     public func frames(at indices: Range<Int>) async throws -> [CGImage] {
-        guard backend != nil else {
+        guard let be = backend else {
             throw SleapIOError.videoError("Video backend not opened. Call open() first.")
         }
-        var results: [CGImage] = []
-        results.reserveCapacity(indices.count)
-        for i in indices {
-            results.append(try await frame(at: i))
+
+        var results = Array<CGImage?>(repeating: nil, count: indices.count)
+        var uncachedStart: Int?
+
+        func fetchBatch(_ range: Range<Int>) async throws {
+            guard !range.isEmpty else { return }
+            let images = try await be.frames(at: range)
+            for (offset, image) in images.enumerated() {
+                let frameIndex = range.lowerBound + offset
+                frameCache.set(image, for: frameIndex)
+                results[frameIndex - indices.lowerBound] = image
+            }
         }
-        return results
+
+        for index in indices {
+            let resultIndex = index - indices.lowerBound
+            if let cached = frameCache.get(index) {
+                if let start = uncachedStart {
+                    try await fetchBatch(start..<index)
+                    uncachedStart = nil
+                }
+                results[resultIndex] = cached
+            } else if uncachedStart == nil {
+                uncachedStart = index
+            }
+        }
+
+        if let start = uncachedStart {
+            try await fetchBatch(start..<indices.upperBound)
+        }
+
+        return results.compactMap { $0 }
     }
 
     /// Async subscript for frame access.
@@ -104,5 +175,15 @@ extension Video {
     /// Hint to prefetch frames (best-effort).
     public func prefetch(indices: IndexSet) {
         backend?.prefetch(indices: indices)
+    }
+
+    private func syncMetadataFromBackend() {
+        guard let be = backend else { return }
+        if let count = be.frameCount {
+            frameCount = count
+        }
+        if let size = be.frameSize {
+            frameSize = size
+        }
     }
 }

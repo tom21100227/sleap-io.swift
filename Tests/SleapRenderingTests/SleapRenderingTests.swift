@@ -1,7 +1,10 @@
 import XCTest
 import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 @testable import SleapRendering
 @testable import SleapIO
+import SleapVideo
 
 // MARK: - Test Helpers
 
@@ -43,6 +46,37 @@ private func makeTestImage(width: Int = 100, height: Int = 100) -> CGImage {
     ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
     return ctx.makeImage()!
+}
+
+@discardableResult
+private func writePNG(_ image: CGImage, to url: URL) -> Bool {
+    guard let dest = CGImageDestinationCreateWithURL(
+        url as CFURL,
+        UTType.png.identifier as CFString,
+        1,
+        nil
+    ) else { return false }
+    CGImageDestinationAddImage(dest, image, nil)
+    return CGImageDestinationFinalize(dest)
+}
+
+private func createImageSequenceDirectory(images: [CGImage]) throws -> URL {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sleap_render_test_\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    for (index, image) in images.enumerated() {
+        let url = dir.appendingPathComponent(String(format: "frame_%04d.png", index))
+        guard writePNG(image, to: url) else {
+            throw NSError(domain: "RenderTestHelper", code: 1)
+        }
+    }
+
+    return dir
+}
+
+private func cleanupDirectory(_ url: URL) {
+    try? FileManager.default.removeItem(at: url)
 }
 
 private func imagesAreIdentical(_ a: CGImage, _ b: CGImage) -> Bool {
@@ -136,12 +170,42 @@ final class ColorPaletteTests: XCTestCase {
 
 final class PoseRendererTests: XCTestCase {
 
+    func testRenderFrameUsesUnderlyingVideoImage() async throws {
+        let source = makeTestImage(width: 60, height: 40)
+        let dir = try createImageSequenceDirectory(images: [source])
+        defer { cleanupDirectory(dir) }
+
+        let video = Video(filename: dir.path, backendType: "imageSequence")
+        let frame = LabeledFrame(video: video, frameIndex: 0, instances: [])
+
+        let result = try await PoseRenderer().render(frame: frame, options: .defaults)
+        XCTAssertTrue(imagesAreIdentical(source, result))
+    }
+
     func testRenderReturnsSameDimensions() {
         let skel = makeSkeleton(nodeCount: 3)
         let image = makeTestImage(width: 200, height: 150)
         let result = PoseRenderer().render(instances: [makeInstance(skeleton: skel)], onto: image, skeleton: skel)
         XCTAssertEqual(result.width, 200)
         XCTAssertEqual(result.height, 150)
+    }
+
+    func testRenderFrameDrawsOverVideoImage() async throws {
+        let source = makeTestImage(width: 100, height: 100)
+        let dir = try createImageSequenceDirectory(images: [source])
+        defer { cleanupDirectory(dir) }
+
+        let skel = makeSkeleton(nodeCount: 3)
+        let frame = LabeledFrame(
+            video: Video(filename: dir.path, backendType: "imageSequence"),
+            frameIndex: 0,
+            instances: [makeInstance(skeleton: skel)]
+        )
+
+        let result = try await PoseRenderer().render(frame: frame, options: .defaults)
+        XCTAssertEqual(result.width, source.width)
+        XCTAssertEqual(result.height, source.height)
+        XCTAssertFalse(imagesAreIdentical(source, result))
     }
 
     func testRenderEmptyInstancesUnchanged() {
@@ -244,5 +308,29 @@ final class PoseRendererTests: XCTestCase {
         let image = makeTestImage()
         let result = PoseRenderer().render(instances: [inst], onto: image, skeleton: skel)
         XCTAssertEqual(result.width, image.width)
+    }
+
+    func testTransformedBoundingRectUsesAllCorners() {
+        let rect = CGRect(x: 10, y: 10, width: 20, height: 40)
+        let transform = CGAffineTransform(rotationAngle: .pi / 4)
+
+        let corners = [
+            CGPoint(x: rect.minX, y: rect.minY).applying(transform),
+            CGPoint(x: rect.maxX, y: rect.minY).applying(transform),
+            CGPoint(x: rect.minX, y: rect.maxY).applying(transform),
+            CGPoint(x: rect.maxX, y: rect.maxY).applying(transform),
+        ]
+        let expected = CGRect(
+            x: corners.map(\.x).min()!,
+            y: corners.map(\.y).min()!,
+            width: corners.map(\.x).max()! - corners.map(\.x).min()!,
+            height: corners.map(\.y).max()! - corners.map(\.y).min()!
+        )
+
+        let actual = PoseRenderer.transformedBoundingRect(rect, by: transform)
+        XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.001)
+        XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.001)
+        XCTAssertEqual(actual.width, expected.width, accuracy: 0.001)
+        XCTAssertEqual(actual.height, expected.height, accuracy: 0.001)
     }
 }

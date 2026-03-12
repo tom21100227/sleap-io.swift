@@ -47,7 +47,13 @@ private func cleanupDirectory(_ url: URL) {
 #if canImport(AVFoundation)
 import AVFoundation
 
-private func createTestVideo(frameCount: Int = 10, width: Int = 64, height: Int = 64, fps: Double = 30.0) async throws -> URL {
+private func createTestVideo(
+    frameCount: Int = 10,
+    width: Int = 64,
+    height: Int = 64,
+    fps: Double = 30.0,
+    preferredTransform: CGAffineTransform? = nil
+) async throws -> URL {
     let outputURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("sleap_test_video_\(UUID().uuidString).mp4")
     try? FileManager.default.removeItem(at: outputURL)
@@ -60,6 +66,9 @@ private func createTestVideo(frameCount: Int = 10, width: Int = 64, height: Int 
     ]
     let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
     writerInput.expectsMediaDataInRealTime = false
+    if let preferredTransform {
+        writerInput.transform = preferredTransform
+    }
     let adaptor = AVAssetWriterInputPixelBufferAdaptor(
         assetWriterInput: writerInput,
         sourcePixelBufferAttributes: [
@@ -129,6 +138,25 @@ final class MockVideoBackend: VideoBackend, @unchecked Sendable {
     }
 }
 
+final class BatchAwareBackend: VideoBackend, @unchecked Sendable {
+    var singleFrameCalls = 0
+    var batchCalls = 0
+
+    var frameCount: Int? { 10 }
+    var frameSize: (height: Int, width: Int, channels: Int)? { (32, 32, 3) }
+    var fps: Double? { 30.0 }
+
+    func frame(at index: Int) async throws -> CGImage {
+        singleFrameCalls += 1
+        return makeTestImage(width: 32, height: 32)!
+    }
+
+    func frames(at indices: Range<Int>) async throws -> [CGImage] {
+        batchCalls += 1
+        return indices.map { _ in makeTestImage(width: 32, height: 32)! }
+    }
+}
+
 // MARK: - VideoBackend Protocol Tests
 
 final class VideoBackendProtocolTests: XCTestCase {
@@ -187,6 +215,22 @@ final class AVFoundationBackendTests: XCTestCase {
         let be = try await AVFoundationBackend(url: testVideoURL!)
         let img = try await be.frame(at: 0)
         XCTAssertEqual(img.width, 64)
+    }
+    func testFrameSizeMatchesDisplayOrientation() async throws {
+        let portraitURL = try await createTestVideo(
+            frameCount: 4,
+            width: 80,
+            height: 40,
+            fps: 30.0,
+            preferredTransform: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 40, ty: 0)
+        )
+        defer { try? FileManager.default.removeItem(at: portraitURL) }
+
+        let be = try await AVFoundationBackend(url: portraitURL)
+        let image = try await be.frame(at: 0)
+
+        XCTAssertEqual(be.frameSize?.width, image.width)
+        XCTAssertEqual(be.frameSize?.height, image.height)
     }
     func testOutOfRangeThrows() async throws {
         let be = try await AVFoundationBackend(url: testVideoURL!)
@@ -328,6 +372,18 @@ final class VideoExtensionTests: XCTestCase {
     func testFrameWithoutOpenThrows() async {
         let video = Video(filename: "/some/path.mp4", backendType: "media")
         do { _ = try await video.frame(at: 0); XCTFail("Expected error") } catch {}
+    }
+
+    func testFramesUsesBackendBatchAPI() async throws {
+        let backend = BatchAwareBackend()
+        let video = Video(filename: "unused", backendType: "custom")
+        video.backend = backend
+
+        let images = try await video.frames(at: 0..<3)
+
+        XCTAssertEqual(images.count, 3)
+        XCTAssertEqual(backend.batchCalls, 1)
+        XCTAssertEqual(backend.singleFrameCalls, 0)
     }
 
     func testFrameSizePopulatedAfterOpen() async throws {

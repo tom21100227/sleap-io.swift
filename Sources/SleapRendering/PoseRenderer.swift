@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreText
 import SleapIO
+import SleapVideo
 
 /// Renders pose overlays onto images using CoreGraphics.
 public struct PoseRenderer: Sendable {
@@ -117,52 +118,36 @@ public struct PoseRenderer: Sendable {
 
     // MARK: - Render LabeledFrame
 
-    /// Render a full labeled frame. Since video frame loading is not yet implemented
-    /// (Phase 2 SleapVideo), this creates a blank canvas and draws the overlays.
     public func render(frame: LabeledFrame, options: RenderOptions) async throws -> CGImage {
-        guard let skeleton = frame.instances.first?.skeleton else {
-            // Return a minimal blank image if no instances.
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            guard let ctx = CGContext(
-                data: nil, width: 1, height: 1,
-                bitsPerComponent: 8, bytesPerRow: 4,
-                space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ), let img = ctx.makeImage() else {
-                throw SleapIOError.videoError("Failed to create minimal CGImage")
-            }
-            return img
+        if frame.video.backend == nil {
+            try await frame.video.open()
         }
 
-        // Determine canvas size from bounding box of all instances.
-        var maxX: CGFloat = 640
-        var maxY: CGFloat = 480
-        for instance in frame.instances {
-            if let box = instance.boundingBox {
-                maxX = max(maxX, box.maxX + 20)
-                maxY = max(maxY, box.maxY + 20)
-            }
+        let image = try await frame.video.frame(at: frame.frameIndex)
+        guard !frame.instances.isEmpty else {
+            return image
         }
 
-        let width = Int(maxX)
-        let height = Int(maxY)
+        let width = image.width
+        let height = image.height
 
         guard let context = Self.makeFlippedContext(width: width, height: height) else {
             throw SleapIOError.videoError("Failed to create CGContext for LabeledFrame rendering")
         }
 
-        // Fill with black background.
-        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-        // Use a renderer configured with the provided options.
         let renderer = PoseRenderer(options: options)
-        renderer.render(
-            instances: frame.instances,
-            in: context,
-            skeleton: skeleton,
-            transform: .identity
-        )
+        let groupedInstances = Dictionary(grouping: frame.instances) { ObjectIdentifier($0.skeleton) }
+        for instances in groupedInstances.values {
+            guard let skeleton = instances.first?.skeleton else { continue }
+            renderer.render(
+                instances: instances,
+                in: context,
+                skeleton: skeleton,
+                transform: .identity
+            )
+        }
 
         guard let result = context.makeImage() else {
             throw SleapIOError.videoError("Failed to create CGImage from rendered context")
@@ -187,6 +172,22 @@ public struct PoseRenderer: Sendable {
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
         return context
+    }
+
+    static func transformedBoundingRect(_ rect: CGRect, by transform: CGAffineTransform) -> CGRect {
+        let corners = [
+            CGPoint(x: rect.minX, y: rect.minY).applying(transform),
+            CGPoint(x: rect.maxX, y: rect.minY).applying(transform),
+            CGPoint(x: rect.minX, y: rect.maxY).applying(transform),
+            CGPoint(x: rect.maxX, y: rect.maxY).applying(transform),
+        ]
+
+        let minX = corners.map(\.x).min() ?? rect.minX
+        let maxX = corners.map(\.x).max() ?? rect.maxX
+        let minY = corners.map(\.y).min() ?? rect.minY
+        let maxY = corners.map(\.y).max() ?? rect.maxY
+
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     // MARK: - Private drawing helpers
@@ -335,17 +336,7 @@ public struct PoseRenderer: Sendable {
         in context: CGContext
     ) {
         guard let box = instance.boundingBox else { return }
-
-        // Transform the corners of the bounding box.
-        let topLeft = CGPoint(x: box.minX, y: box.minY).applying(transform)
-        let bottomRight = CGPoint(x: box.maxX, y: box.maxY).applying(transform)
-
-        let transformedRect = CGRect(
-            x: min(topLeft.x, bottomRight.x),
-            y: min(topLeft.y, bottomRight.y),
-            width: abs(bottomRight.x - topLeft.x),
-            height: abs(bottomRight.y - topLeft.y)
-        )
+        let transformedRect = Self.transformedBoundingRect(box, by: transform)
 
         context.setStrokeColor(color)
         context.setLineWidth(1.0)

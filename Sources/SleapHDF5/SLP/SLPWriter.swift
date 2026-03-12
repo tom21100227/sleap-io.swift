@@ -1,6 +1,7 @@
 import Foundation
 import CHDF5
 import SleapIO
+import SleapVideo
 
 /// Writes SLEAP .slp files (HDF5-based).
 public struct SLPWriter {
@@ -27,6 +28,7 @@ public struct SLPWriter {
 
         // 3. Write videos
         try writeVideos(labels.videos, file: file)
+        try writeEmbeddedVideos(labels.videos, file: file)
 
         // 4. Collect and write compound datasets
         try writeCompoundData(labels, file: file)
@@ -111,6 +113,26 @@ public struct SLPWriter {
             videoJsons.append(String(data: data, encoding: .utf8) ?? "")
         }
         try file.writeVLenStringDataset(name: "videos_json", strings: videoJsons)
+    }
+
+    private static func writeEmbeddedVideos(_ videos: [Video], file: HDF5File) throws {
+        for (index, video) in videos.enumerated() {
+            guard video.backendType == "hdf5" else { continue }
+            guard let backend = video.backend as? SleapHDF5EmbeddedVideoBackend else { continue }
+
+            let frameData = backend.embeddedFrames.keys.sorted().compactMap { frameIndex in
+                backend.embeddedFrames[frameIndex].map { (sourceFrameIdx: frameIndex, data: $0) }
+            }
+
+            try EmbeddedVideo.writeFrames(
+                frameData: frameData,
+                videoIndex: index,
+                sourceVideoJSON: backend.sourceVideoJSON,
+                format: backend.format,
+                channelOrder: backend.channelOrder,
+                to: file
+            )
+        }
     }
 
     // MARK: - Write compound datasets (frames, instances, points, pred_points)

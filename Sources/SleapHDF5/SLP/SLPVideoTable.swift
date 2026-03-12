@@ -1,5 +1,6 @@
 import Foundation
 import SleapIO
+import SleapVideo
 
 enum SLPVideoTable {
     static func readVideosAndIdMap(from file: HDF5File) throws -> (videos: [Video], videoIdMap: [Int: Int]) {
@@ -40,6 +41,38 @@ enum SLPVideoTable {
         }
 
         return Video(filename: filename, backendType: backendType, backendMetadata: backend)
+    }
+
+    static func configureBackends(
+        for videos: [Video],
+        filePath: String,
+        formatId: Float
+    ) throws {
+        for (index, video) in videos.enumerated() where video.backendType == "hdf5" {
+            video.backendOpener = {
+                try SleapHDF5EmbeddedVideoBackend(
+                    path: filePath,
+                    videoIndex: index,
+                    formatId: formatId
+                )
+            }
+
+            guard let backend = try? SleapHDF5EmbeddedVideoBackend(
+                path: filePath,
+                videoIndex: index,
+                formatId: formatId
+            ) else {
+                continue
+            }
+            video.backend = backend
+
+            if let count = backend.frameCount {
+                video.frameCount = count
+            }
+            if let size = backend.frameSize {
+                video.frameSize = size
+            }
+        }
     }
 
     static func resolvedIndex(for rawID: Int, videoIdMap: [Int: Int], videoCount: Int) -> Int? {

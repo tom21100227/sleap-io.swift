@@ -2,6 +2,7 @@ import XCTest
 import CHDF5
 @testable import SleapIO
 @testable import SleapHDF5
+import SleapVideo
 
 /// S01-S03, S06-S07: SLP reader tests.
 ///
@@ -352,6 +353,56 @@ final class SLPReaderTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(frame.frameIndex, 0)
             XCTAssertGreaterThan(frame.instances.count, 0)
         }
+    }
+
+    func testS06_embeddedVideoFrameAccessibleThroughVideoAPI() async throws {
+        let url = try requireFixture("packaged_frames_v1_5.pkg.slp")
+        let labels = try await Labels.load(from: url)
+
+        var resolvedImage = false
+        for i in 0..<labels.count {
+            let frame = labels[i]
+            do {
+                let image = try await frame.video.frame(at: frame.frameIndex)
+                XCTAssertGreaterThan(image.width, 0)
+                XCTAssertGreaterThan(image.height, 0)
+                resolvedImage = true
+                break
+            } catch {
+                continue
+            }
+        }
+
+        XCTAssertTrue(resolvedImage, "Expected at least one packaged frame to be retrievable through Video.frame(at:)")
+    }
+
+    func testS06_embeddedVideoCanReopenAfterClose() async throws {
+        let url = try requireFixture("packaged_frames_v1_5.pkg.slp")
+        let labels = try await Labels.load(from: url)
+
+        var resolved: (video: Video, frameIndex: Int)?
+        for i in 0..<labels.count {
+            let frame = labels[i]
+            do {
+                _ = try await frame.video.frame(at: frame.frameIndex)
+                resolved = (frame.video, frame.frameIndex)
+                break
+            } catch {
+                continue
+            }
+        }
+
+        guard let resolved else {
+            XCTFail("Expected at least one packaged frame to be retrievable before reopen")
+            return
+        }
+
+        resolved.video.close()
+        try await resolved.video.open()
+
+        let image = try await resolved.video.frame(at: resolved.frameIndex)
+        XCTAssertGreaterThan(image.width, 0)
+        XCTAssertGreaterThan(image.height, 0)
     }
 
     // MARK: - S07: from_predicted link resolution

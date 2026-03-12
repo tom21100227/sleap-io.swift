@@ -25,6 +25,7 @@ public actor AVFoundationBackend: VideoBackend {
         }
 
         let size = try await track.load(.naturalSize)
+        let preferredTransform = try await track.load(.preferredTransform)
         let fps = try await track.load(.nominalFrameRate)
         let duration = try await asset.load(.duration)
 
@@ -32,12 +33,16 @@ public actor AVFoundationBackend: VideoBackend {
             throw SleapIOError.videoError("Invalid frame rate for \(url.lastPathComponent)")
         }
 
+        let displayRect = CGRect(origin: .zero, size: size).applying(preferredTransform)
+        let displayWidth = Int(abs(displayRect.width).rounded())
+        let displayHeight = Int(abs(displayRect.height).rounded())
+
         self._fps = Double(fps)
         self.duration = duration
         self._frameCount = Int(CMTimeGetSeconds(duration) * Double(fps))
         self._frameSize = (
-            height: Int(size.height),
-            width: Int(size.width),
+            height: displayHeight,
+            width: displayWidth,
             channels: 3
         )
 

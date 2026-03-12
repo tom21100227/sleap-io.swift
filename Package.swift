@@ -33,7 +33,7 @@ let package = Package(
         // HDF5 wrapper + SLP read/write + lazy loading
         .target(
             name: "SleapHDF5",
-            dependencies: ["CHDF5", "SleapIO"]
+            dependencies: ["CHDF5", "SleapIO", "SleapVideo"]
         ),
 
         // Video abstraction + AVFoundation backend
@@ -55,7 +55,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SleapHDF5Tests",
-            dependencies: ["SleapHDF5", "SleapIO"]
+            dependencies: ["SleapHDF5", "SleapIO", "SleapVideo"]
         ),
         .testTarget(
             name: "SleapVideoTests",
@@ -63,7 +63,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SleapRenderingTests",
-            dependencies: ["SleapRendering", "SleapIO"]
+            dependencies: ["SleapRendering", "SleapIO", "SleapVideo"]
         ),
     ]
 )
