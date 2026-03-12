@@ -11,6 +11,8 @@ The plan is organized into implementation steps within each phase, ordered by de
 See also:
 - [FEASIBILITY.md](./FEASIBILITY.md) — Technical feasibility assessment
 - [API_DESIGN.md](./API_DESIGN.md) — Full public API surface specification
+- [PHASE3_SPEC.md](./PHASE3_SPEC.md) — Phase 3 interchange codec behavior
+- [PHASE4_SPEC.md](./PHASE4_SPEC.md) — Phase 4 advanced I/O + CLI behavior
 
 ---
 
@@ -699,6 +701,8 @@ fixture contract defined in `PHASE3_SPEC.md`.
 ---
 
 ## Phase 4: Advanced I/O
+
+Behavioral contract for this phase lives in [PHASE4_SPEC.md](./PHASE4_SPEC.md).
 
 ### Step 4.1: Analysis HDF5
 
