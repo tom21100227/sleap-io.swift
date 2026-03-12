@@ -160,4 +160,4 @@ Fixtures are not checked into git. Regenerate with the Python script.
 - **Phase 2** (NEXT): Video backends (AVFoundation), rendering (CoreGraphics), geometric transforms (Accelerate)
 - **Phase 3**: COCO JSON, CSV, Label Studio, YOLO, AlphaTracker
 - **Phase 4**: Analysis HDF5, JABS, DLC, CLI (swift-argument-parser)
-- **Phase 5**: NWB, LEAP .mat (deferred — no Swift ecosystem)
+- **Phase 5**: NWB, LEAP .mat — out of scope (no Swift ecosystem)

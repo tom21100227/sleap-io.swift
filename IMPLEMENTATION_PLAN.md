@@ -730,9 +730,9 @@ Using `swift-argument-parser`. Commands: `show`, `convert`, `info`.
 
 ---
 
-## Phase 5: NWB + LEAP
+## Phase 5: NWB + LEAP — Out of Scope
 
-Deferred. NWB requires implementing a subset of HDMF schema handling over HDF5 with zero existing Swift ecosystem support. LEAP requires MAT file parsing.
+Not implemented. NWB requires implementing a subset of HDMF schema handling over HDF5 with zero existing Swift ecosystem support. LEAP requires MAT file parsing. These formats are out of scope for this project; attempting to load them will throw a "not implemented" error.
 
 ---
 

@@ -343,10 +343,12 @@ That makes NWB the strongest reason to treat full parity as phased rather than i
 - Embedded video round-tripping
 - CLI via swift-argument-parser
 
-### Phase 4
+### ~~Phase 5~~ — Out of Scope
 
 - LEAP `.mat`
 - NWB
+
+These formats are out of scope for this project due to lack of Swift ecosystem support.
 
 ## Recommendation
 

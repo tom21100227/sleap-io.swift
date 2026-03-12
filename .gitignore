@@ -34,6 +34,9 @@ playground.xcworkspace
 # Generated SLP fixture files are local test artifacts.
 Tests/Fixtures/*.slp
 
+# Stress test fixtures (large real-world files, not checked in).
+Tests/Fixtures/stress/
+
 # CocoaPods
 #
 # We recommend against adding the Pods directory to your .gitignore. However
