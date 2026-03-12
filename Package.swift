@@ -59,11 +59,11 @@ let package = Package(
         ),
         .testTarget(
             name: "SleapVideoTests",
-            dependencies: ["SleapVideo"]
+            dependencies: ["SleapVideo", "SleapIO"]
         ),
         .testTarget(
             name: "SleapRenderingTests",
-            dependencies: ["SleapRendering"]
+            dependencies: ["SleapRendering", "SleapIO"]
         ),
     ]
 )
