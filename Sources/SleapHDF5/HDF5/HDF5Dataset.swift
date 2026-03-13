@@ -58,8 +58,29 @@ final class HDF5Dataset {
     }
 
     /// Read the entire dataset as UInt8 array.
+    ///
+    /// If the dataset's native type is signed int8 (common in h5py-written files),
+    /// reads as int8 and reinterprets the bits as uint8. Using H5T_NATIVE_UINT8
+    /// directly would cause HDF5 to clamp negative int8 values to 0.
     func readUInt8() throws -> [UInt8] {
         let n = count
+        let dtype = datatype  // hold reference to prevent premature dealloc
+        let fileTypeClass = dtype.typeClass
+        let fileTypeSize = H5Tget_size(dtype.id)
+
+        // If the file stores signed 1-byte integers, read as Int8 to preserve bits
+        if fileTypeClass == shim_H5T_INTEGER() && fileTypeSize == 1 {
+            let sign = H5Tget_sign(dtype.id)
+            if sign == H5T_SGN_2 {
+                // Signed int8: read as native int8, then bitcast to uint8
+                var buffer = [Int8](repeating: 0, count: n)
+                try hdf5Check("H5Dread int8") {
+                    H5Dread(id, shim_H5T_NATIVE_INT8(), shim_H5S_ALL(), shim_H5S_ALL(), shim_H5P_DEFAULT(), &buffer)
+                }
+                return buffer.map { UInt8(bitPattern: $0) }
+            }
+        }
+
         var buffer = [UInt8](repeating: 0, count: n)
         try hdf5Check("H5Dread uint8") {
             H5Dread(id, shim_H5T_NATIVE_UINT8(), shim_H5S_ALL(), shim_H5S_ALL(), shim_H5P_DEFAULT(), &buffer)

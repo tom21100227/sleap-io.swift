@@ -76,11 +76,32 @@ public struct EmbeddedVideo {
                 result[sourceIdx] = Data(raw[start..<end])
             }
         } else {
-            // Encoded images (png/jpg): variable-length int8 dataset
-            let frameData = try videoDs.readVLenBytes()
-            for (rowIdx, sourceIdx) in frameNumbers.enumerated() {
-                if rowIdx < frameData.count {
-                    result[sourceIdx] = frameData[rowIdx]
+            // Encoded images (png/jpg): either vlen int8 or fixed-length rank-2 int8
+            let tc = videoDs.datatype.typeClass
+            if tc == shim_H5T_VLEN() {
+                // Variable-length: each row is a different-sized byte array
+                let frameData = try videoDs.readVLenBytes()
+                for (rowIdx, sourceIdx) in frameNumbers.enumerated() {
+                    if rowIdx < frameData.count {
+                        result[sourceIdx] = frameData[rowIdx]
+                    }
+                }
+            } else {
+                // Fixed-length rank-2: (N, maxBytes) int8, padded with zeros
+                let raw = try videoDs.readUInt8()
+                let numRows = shape[0]
+                let rowLen = shape.count >= 2 ? shape[1] : raw.count / max(numRows, 1)
+                for (rowIdx, sourceIdx) in frameNumbers.enumerated() {
+                    guard rowIdx < numRows else { break }
+                    let start = rowIdx * rowLen
+                    let end = start + rowLen
+                    guard end <= raw.count else { break }
+                    // Find actual image end using format-specific markers.
+                    // Can't use trailing-zero stripping because PNG/JPEG contain legitimate zero bytes.
+                    let trimEnd = EmbeddedVideo.findImageEnd(in: raw, start: start, end: end)
+                    if trimEnd > start {
+                        result[sourceIdx] = Data(raw[start..<trimEnd])
+                    }
                 }
             }
         }
@@ -135,6 +156,68 @@ public struct EmbeddedVideo {
         // Write source_video group
         let srcGroup = try group.createGroup(name: "source_video")
         try srcGroup.writeStringAttribute(name: "json", value: sourceVideoJSON)
+    }
+
+    /// Find the actual end of an encoded image within a zero-padded buffer.
+    ///
+    /// Fixed-length HDF5 datasets pad rows with zeros, but PNG/JPEG data contains
+    /// legitimate zero bytes internally, so naive trailing-zero stripping corrupts data.
+    /// Instead, detect the image format and find its end marker:
+    /// - PNG: IEND chunk (4-byte length + "IEND" + 4-byte CRC = `...IEND\xAE\x42\x60\x82`)
+    /// - JPEG: EOI marker (`0xFF 0xD9`)
+    /// - Unknown: fall back to trailing-zero stripping
+    static func findImageEnd(in buffer: [UInt8], start: Int, end: Int) -> Int {
+        let length = end - start
+        guard length >= 8 else { return end }
+
+        // Check PNG magic: 0x89 P N G \r \n 0x1A \n
+        let isPNG = buffer[start] == 0x89
+            && buffer[start + 1] == 0x50  // P
+            && buffer[start + 2] == 0x4E  // N
+            && buffer[start + 3] == 0x47  // G
+
+        if isPNG {
+            // Scan for IEND chunk. The IEND chunk is:
+            //   4 bytes chunk length (0x00000000)
+            //   4 bytes chunk type ("IEND" = 0x49 0x45 0x4E 0x44)
+            //   4 bytes CRC (0xAE 0x42 0x60 0x82)
+            // Total 12 bytes. Search for the "IEND" signature.
+            let iend: [UInt8] = [0x49, 0x45, 0x4E, 0x44]  // "IEND"
+            // Search backwards from end for efficiency (IEND is always last chunk)
+            var pos = end - 8  // minimum: 4 bytes for "IEND" + 4 bytes CRC after it
+            while pos >= start + 4 {
+                if buffer[pos] == iend[0] && buffer[pos + 1] == iend[1]
+                    && buffer[pos + 2] == iend[2] && buffer[pos + 3] == iend[3] {
+                    // Found IEND. End of PNG is 4 bytes CRC after chunk type.
+                    return min(pos + 8, end)  // +4 for "IEND" + 4 for CRC
+                }
+                pos -= 1
+            }
+            // IEND not found — return full buffer
+            return end
+        }
+
+        // Check JPEG magic: 0xFF 0xD8
+        let isJPEG = buffer[start] == 0xFF && buffer[start + 1] == 0xD8
+
+        if isJPEG {
+            // Scan backwards for EOI marker: 0xFF 0xD9
+            var pos = end - 2
+            while pos >= start {
+                if buffer[pos] == 0xFF && buffer[pos + 1] == 0xD9 {
+                    return pos + 2
+                }
+                pos -= 1
+            }
+            return end
+        }
+
+        // Unknown format: fall back to trailing-zero stripping
+        var trimEnd = end
+        while trimEnd > start && buffer[trimEnd - 1] == 0 {
+            trimEnd -= 1
+        }
+        return trimEnd
     }
 
     /// Decode image data to a CGImage.

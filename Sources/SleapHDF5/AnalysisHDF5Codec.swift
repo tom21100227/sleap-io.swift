@@ -117,9 +117,9 @@ public struct AnalysisHDF5Codec {
 
         // Read video_path attribute (optional)
         let videoPath: String
-        do {
-            videoPath = try file.readStringAttribute(name: "video_path")
-        } catch {
+        if HDF5Attribute.exists(on: file.id, name: "video_path") {
+            videoPath = (try? file.readStringAttribute(name: "video_path")) ?? path
+        } else {
             videoPath = path
         }
 

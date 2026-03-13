@@ -193,8 +193,8 @@ final class CLITests: XCTestCase {
 
         let outputPath = tempDir.appendingPathComponent("output.jabs.h5").path
         let result = try runCLI(["convert", fixture, outputPath, "--output-format", "jabs"])
-        // Should fail because JABS needs node names config
-        XCTAssertNotEqual(result.exitCode, 0, "JABS conversion without node names should fail")
+        // JABS export works without explicit node names — uses skeleton node names as default
+        XCTAssertEqual(result.exitCode, 0, "JABS conversion should succeed using skeleton node names")
     }
 
     // MARK: - C05: exit codes

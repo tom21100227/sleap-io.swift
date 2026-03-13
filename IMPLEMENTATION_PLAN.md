@@ -13,6 +13,7 @@ See also:
 - [API_DESIGN.md](./API_DESIGN.md) — Full public API surface specification
 - [PHASE3_SPEC.md](./PHASE3_SPEC.md) — Phase 3 interchange codec behavior
 - [PHASE4_SPEC.md](./PHASE4_SPEC.md) — Phase 4 advanced I/O + CLI behavior
+- [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) — Release gate and go/no-go checklist
 
 ---
 

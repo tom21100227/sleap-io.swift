@@ -48,7 +48,8 @@ enum SLPVideoTable {
         filePath: String,
         formatId: Float
     ) throws {
-        for (index, video) in videos.enumerated() where video.backendType == "hdf5" {
+        for (index, video) in videos.enumerated()
+            where video.backendType.lowercased().hasPrefix("hdf5") {
             video.backendOpener = {
                 try SleapHDF5EmbeddedVideoBackend(
                     path: filePath,

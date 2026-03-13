@@ -157,7 +157,7 @@ Fixtures are not checked into git. Regenerate with the Python script.
 ## Phase Roadmap
 
 - **Phase 1** (DONE): Package structure, model types, HDF5 wrapper, SLP read/write, lazy loading, embedded video, dictionary/tensor codecs
-- **Phase 2** (NEXT): Video backends (AVFoundation), rendering (CoreGraphics), geometric transforms (Accelerate)
-- **Phase 3**: COCO JSON, CSV, Label Studio, YOLO, AlphaTracker
-- **Phase 4**: Analysis HDF5, JABS, DLC, CLI (swift-argument-parser)
+- **Phase 2** (DONE): Video backends (AVFoundation), rendering (CoreGraphics), geometric transforms (Accelerate)
+- **Phase 3** (DONE): COCO JSON, CSV, Label Studio, YOLO, AlphaTracker
+- **Phase 4** (DONE): Analysis HDF5, JABS, DLC, CLI (swift-argument-parser)
 - **Phase 5**: NWB, LEAP .mat — out of scope (no Swift ecosystem)

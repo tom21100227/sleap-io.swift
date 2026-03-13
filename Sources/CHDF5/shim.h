@@ -54,4 +54,12 @@ static inline unsigned shim_H5F_ACC_RDONLY(void)        { return H5F_ACC_RDONLY;
 static inline unsigned shim_H5F_ACC_RDWR(void)          { return H5F_ACC_RDWR; }
 static inline unsigned shim_H5F_ACC_TRUNC(void)         { return H5F_ACC_TRUNC; }
 
+// --- Error stack default (H5E_DEFAULT is a macro) ---
+static inline hid_t shim_H5E_DEFAULT(void)              { return (hid_t)H5E_DEFAULT; }
+
+// --- Suppress HDF5 stderr diagnostic output ---
+static inline void shim_H5E_suppress(void) {
+    H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
+}
+
 #endif /* CHDF5_SHIM_H */

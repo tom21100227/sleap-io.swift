@@ -7,7 +7,13 @@ final class HDF5File {
     let id: hid_t
     let path: String
 
+    /// Suppress HDF5's default stderr error stack output once on first use.
+    private static let suppressErrorStack: Void = {
+        shim_H5E_suppress()
+    }()
+
     private init(id: hid_t, path: String) {
+        _ = Self.suppressErrorStack
         self.id = id
         self.path = path
     }

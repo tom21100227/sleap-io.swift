@@ -150,12 +150,16 @@ private func saveLabelsSync(_ labels: Labels, to path: String, format: FileForma
     case .analysisHDF5:
         try AnalysisHDF5Codec.write(labels, to: path)
     case .jabs:
-        guard jabsNodeNames != nil else {
-            throw SleapIOError.unsupportedFormat(
-                "JABS export requires --jabs-node-names configuration file.")
+        if let nodeNamesPath = jabsNodeNames {
+            let nodeNamesData = try Data(contentsOf: URL(fileURLWithPath: nodeNamesPath))
+            guard let names = try JSONSerialization.jsonObject(with: nodeNamesData) as? [String] else {
+                throw SleapIOError.unsupportedFormat(
+                    "JABS node names file must be a JSON array of strings.")
+            }
+            try JABSCodec.write(labels, to: path, config: JABSCodec.Config(nodeNames: names))
+        } else {
+            try JABSCodec.write(labels, to: path)
         }
-        // TODO: Parse node names from config file and pass to JABSCodec.write
-        try JABSCodec.write(labels, to: path)
     case .deepLabCut:
         throw SleapIOError.unsupportedFormat(
             "DeepLabCut format is read-only.")
