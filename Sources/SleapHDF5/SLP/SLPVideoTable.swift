@@ -40,7 +40,16 @@ enum SLPVideoTable {
             backendType = "hdf5"
         }
 
-        return Video(filename: filename, backendType: backendType, backendMetadata: backend)
+        let video = Video(filename: filename, backendType: backendType, backendMetadata: backend)
+
+        // Extract frame count and size from backend shape if available.
+        // Python sleap-io stores shape as [num_frames, height, width, channels].
+        if let shape = backend["shape"] as? [Int], shape.count >= 4 {
+            video.frameCount = shape[0]
+            video.frameSize = (height: shape[1], width: shape[2], channels: shape[3])
+        }
+
+        return video
     }
 
     static func configureBackends(

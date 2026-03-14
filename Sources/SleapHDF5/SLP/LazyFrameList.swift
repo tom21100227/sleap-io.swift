@@ -8,14 +8,15 @@ public final class LazyFrameList: FrameStore, FrameMetadataProvider, @unchecked 
     let store: LazyDataStore
 
     /// Cache of already-materialized frames. Keyed by row index.
-    /// Ensures identity stability: labels[i] always returns the same object.
-    private var cache: [Int: LabeledFrame] = [:]
+    /// Ensures identity stability within capacity: labels[i] returns the same object
+    /// as long as the entry hasn't been evicted.
+    private var cache = LRUCache<Int, LabeledFrame>(capacity: 10_000)
 
     /// The set of indices that have been cached (for hybrid save).
     var cachedIndices: Set<Int> { Set(cache.keys) }
 
     /// Whether any frames have been cached.
-    var hasCachedFrames: Bool { !cache.isEmpty }
+    var hasCachedFrames: Bool { cache.count > 0 }
 
     init(store: LazyDataStore) {
         self.store = store
@@ -26,9 +27,9 @@ public final class LazyFrameList: FrameStore, FrameMetadataProvider, @unchecked 
     public var count: Int { store.framesData.count }
 
     public func frame(at index: Int) -> LabeledFrame {
-        if let cached = cache[index] { return cached }
+        if let cached = cache.get(index) { return cached }
         let frame = store.materializeFrame(at: index)
-        cache[index] = frame
+        cache.set(index, value: frame)
         return frame
     }
 
@@ -39,8 +40,9 @@ public final class LazyFrameList: FrameStore, FrameMetadataProvider, @unchecked 
     }
 
     /// Direct access to cached frame (nil if not yet materialized).
+    /// Promotes the entry to most-recently-used on hit.
     func cachedFrame(at index: Int) -> LabeledFrame? {
-        cache[index]
+        cache.get(index)
     }
 
     /// O(1) total instance count from column store.

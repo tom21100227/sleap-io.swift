@@ -69,7 +69,18 @@ public final class SleapHDF5EmbeddedVideoBackend: VideoBackend, @unchecked Senda
             guard let decoded = EmbeddedVideo.decodeImage(from: data) else {
                 throw SleapIOError.videoError("Failed to decode embedded frame \(index)")
             }
-            image = decoded
+            // Python SLEAP stores BGR frames from OpenCV. When JPEG-encoded,
+            // the BGR data is written as-is (JPEG assumes RGB), so the decoded
+            // image has R and B channels swapped. Fix by swapping channels if
+            // the channelOrder metadata says "BGR".
+            if channelOrder.uppercased() == "BGR" || channelOrder.uppercased() == "BGRA" {
+                guard let swapped = Self.swapRedBlue(decoded) else {
+                    throw SleapIOError.videoError("Failed to swap channels for embedded frame \(index)")
+                }
+                image = swapped
+            } else {
+                image = decoded
+            }
         case .raw(let size):
             guard let decoded = Self.decodeRawFrame(data, size: size, channelOrder: channelOrder) else {
                 throw SleapIOError.videoError("Failed to decode embedded frame \(index)")
@@ -81,6 +92,39 @@ public final class SleapHDF5EmbeddedVideoBackend: VideoBackend, @unchecked Senda
             decodedFrames[index] = image
         }
         return image
+    }
+
+    /// Swap red and blue channels in a CGImage (BGR → RGB correction).
+    private static func swapRedBlue(_ image: CGImage) -> CGImage? {
+        let width = image.width
+        let height = image.height
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        // Draw the original image to get pixel data
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        guard let data = context.data else { return nil }
+        let pixels = data.assumingMemoryBound(to: UInt8.self)
+        let pixelCount = width * height
+
+        // Swap R and B channels in place (RGBA layout: [R, G, B, A])
+        for i in 0..<pixelCount {
+            let offset = i * 4
+            let r = pixels[offset]
+            pixels[offset] = pixels[offset + 2]     // R ← B
+            pixels[offset + 2] = r                   // B ← R
+        }
+
+        return context.makeImage()
     }
 
     private static func decodeRawFrame(

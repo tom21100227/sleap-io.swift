@@ -120,6 +120,7 @@ final class MockVideoBackend: VideoBackend, @unchecked Sendable {
     let _frameSize: (height: Int, width: Int, channels: Int)?
     let _fps: Double?
     var frameAccessLog: [Int] = []
+    var toleranceAccessLog: [(index: Int, tolerance: SeekTolerance)] = []
 
     init(frameCount: Int? = 10, frameSize: (height: Int, width: Int, channels: Int)? = (64, 64, 3), fps: Double? = 30.0) {
         self._frameCount = frameCount; self._frameSize = frameSize; self._fps = fps
@@ -135,6 +136,11 @@ final class MockVideoBackend: VideoBackend, @unchecked Sendable {
             throw NSError(domain: "Mock", code: 1)
         }
         return img
+    }
+
+    func frame(at index: Int, tolerance: SeekTolerance) async throws -> CGImage {
+        toleranceAccessLog.append((index: index, tolerance: tolerance))
+        return try await frame(at: index)
     }
 }
 
@@ -179,6 +185,71 @@ final class VideoBackendProtocolTests: XCTestCase {
     func testEmptyRange() async throws {
         let empty = try await MockVideoBackend().frames(at: 0..<0)
         XCTAssertTrue(empty.isEmpty)
+    }
+}
+
+// MARK: - SeekTolerance Tests
+
+final class SeekToleranceTests: XCTestCase {
+    func testDefaultToleranceIsExact() async throws {
+        let mock = MockVideoBackend()
+        let img = try await mock.frame(at: 0, tolerance: .exact)
+        XCTAssertEqual(img.width, 64)
+        XCTAssertEqual(mock.toleranceAccessLog.count, 1)
+        XCTAssertEqual(mock.toleranceAccessLog[0].index, 0)
+    }
+
+    func testAdaptiveToleranceReturnsValidFrame() async throws {
+        let mock = MockVideoBackend()
+        let img = try await mock.frame(at: 3, tolerance: .adaptive)
+        XCTAssertEqual(img.width, 64)
+        XCTAssertEqual(mock.toleranceAccessLog.count, 1)
+        XCTAssertEqual(mock.toleranceAccessLog[0].index, 3)
+    }
+
+    func testVideoExactToleranceUsesCache() async throws {
+        let mock = MockVideoBackend()
+        let video = Video(filename: "unused", backendType: "custom")
+        video.backend = mock
+
+        let img1 = try await video.frame(at: 0, tolerance: .exact)
+        let img2 = try await video.frame(at: 0, tolerance: .exact)
+        XCTAssertEqual(img1.width, 64)
+        XCTAssertEqual(img2.width, 64)
+        // Backend should only be called once; second call served from cache
+        XCTAssertEqual(mock.toleranceAccessLog.count, 1)
+    }
+
+    func testVideoAdaptiveToleranceSkipsCache() async throws {
+        let mock = MockVideoBackend()
+        let video = Video(filename: "unused", backendType: "custom")
+        video.backend = mock
+
+        let img1 = try await video.frame(at: 0, tolerance: .adaptive)
+        let img2 = try await video.frame(at: 0, tolerance: .adaptive)
+        XCTAssertEqual(img1.width, 64)
+        XCTAssertEqual(img2.width, 64)
+        // Backend should be called both times (no caching for adaptive)
+        XCTAssertEqual(mock.toleranceAccessLog.count, 2)
+    }
+
+    func testAdaptiveDoesNotPolluteExactCache() async throws {
+        let mock = MockVideoBackend()
+        let video = Video(filename: "unused", backendType: "custom")
+        video.backend = mock
+
+        // First call: adaptive (should not cache)
+        _ = try await video.frame(at: 0, tolerance: .adaptive)
+        // Second call: exact (should hit backend, not cache)
+        _ = try await video.frame(at: 0, tolerance: .exact)
+
+        // Both calls should reach the backend
+        XCTAssertEqual(mock.toleranceAccessLog.count, 2)
+        // Verify the tolerance values passed through correctly
+        XCTAssertTrue(
+            mock.toleranceAccessLog[0].tolerance == .adaptive
+            && mock.toleranceAccessLog[1].tolerance == .exact
+        )
     }
 }
 
@@ -415,6 +486,26 @@ final class VideoExtensionTests: XCTestCase {
         try await video.open()
         XCTAssertNotNil(video.frameCount)
         XCTAssertGreaterThan(video.frameCount!, 0)
+        video.close()
+    }
+
+    func testPrefetchStoresIntoSharedFrameCache() async throws {
+        let url = try await createTestVideo(frameCount: 5, width: 64, height: 64, fps: 30.0)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let video = Video(filename: url.path, backendType: "media")
+        try await video.open()
+
+        // Prefetch frame 1
+        video.prefetch(indices: IndexSet(integer: 1))
+
+        // Allow the async prefetch task time to complete
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        // Retrieve the prefetched frame -- should succeed without error
+        let img = try await video.frame(at: 1)
+        XCTAssertEqual(img.width, 64)
+        XCTAssertEqual(img.height, 64)
+
         video.close()
     }
     #endif

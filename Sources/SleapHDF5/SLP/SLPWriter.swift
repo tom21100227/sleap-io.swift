@@ -108,6 +108,14 @@ public struct SLPWriter {
             var backend: [String: Any] = video.backendMetadata
             backend["filename"] = video.filename
             backend["type"] = video.backendType
+
+            // Persist shape if available but not already in metadata
+            if backend["shape"] == nil,
+               let fc = video.frameCount,
+               let fs = video.frameSize {
+                backend["shape"] = [fc, fs.height, fs.width, fs.channels]
+            }
+
             dict["backend"] = backend
             let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
             videoJsons.append(String(data: data, encoding: .utf8) ?? "")

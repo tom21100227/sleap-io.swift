@@ -14,22 +14,25 @@ public actor AVFoundationBackend: VideoBackend {
     private let _fps: Double
     private let duration: CMTime
 
-    /// Cache for prefetched frames, keyed by frame index.
-    /// Bounded to avoid unbounded memory growth on long videos.
-    private var prefetchCache: [Int: CGImage] = [:]
-    private static let maxPrefetchCacheSize = 64
+    /// Shared frame cache owned by the Video instance.
+    /// When non-nil, prefetched frames are stored here instead of a private cache.
+    private let frameCache: FrameCache?
 
     /// Handle to the in-flight prefetch task so it can be cancelled on new requests.
     private var prefetchTask: Task<Void, Never>?
 
-    /// Create a backend for a video file.
-    public init(url: URL) async throws {
-        self.asset = AVURLAsset(url: url)
+    /// Loaded video track properties (shared between init paths).
+    private struct TrackInfo {
+        let fps: Double
+        let duration: CMTime
+        let frameCount: Int
+        let frameSize: (height: Int, width: Int, channels: Int)
+    }
 
-        // Load video track properties
+    private static func loadTrackInfo(from asset: AVURLAsset) async throws -> TrackInfo {
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard let track = tracks.first else {
-            throw SleapIOError.videoError("No video track found in \(url.lastPathComponent)")
+            throw SleapIOError.videoError("No video track found in \(asset.url.lastPathComponent)")
         }
 
         let size = try await track.load(.naturalSize)
@@ -38,22 +41,48 @@ public actor AVFoundationBackend: VideoBackend {
         let duration = try await asset.load(.duration)
 
         guard fps > 0 else {
-            throw SleapIOError.videoError("Invalid frame rate for \(url.lastPathComponent)")
+            throw SleapIOError.videoError("Invalid frame rate for \(asset.url.lastPathComponent)")
         }
 
         let displayRect = CGRect(origin: .zero, size: size).applying(preferredTransform)
-        let displayWidth = Int(abs(displayRect.width).rounded())
-        let displayHeight = Int(abs(displayRect.height).rounded())
-
-        self._fps = Double(fps)
-        self.duration = duration
-        self._frameCount = Int(CMTimeGetSeconds(duration) * Double(fps))
-        self._frameSize = (
-            height: displayHeight,
-            width: displayWidth,
-            channels: 3
+        return TrackInfo(
+            fps: Double(fps),
+            duration: duration,
+            frameCount: Int(CMTimeGetSeconds(duration) * Double(fps)),
+            frameSize: (
+                height: Int(abs(displayRect.height).rounded()),
+                width: Int(abs(displayRect.width).rounded()),
+                channels: 3
+            )
         )
+    }
 
+    /// Create a backend for a video file.
+    public init(url: URL) async throws {
+        let asset = AVURLAsset(url: url)
+        let info = try await Self.loadTrackInfo(from: asset)
+        self.asset = asset
+        self.frameCache = nil
+        self._fps = info.fps
+        self.duration = info.duration
+        self._frameCount = info.frameCount
+        self._frameSize = info.frameSize
+        self.generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+    }
+
+    /// Create a backend for a video file with a shared frame cache.
+    init(url: URL, frameCache: FrameCache?) async throws {
+        let asset = AVURLAsset(url: url)
+        let info = try await Self.loadTrackInfo(from: asset)
+        self.asset = asset
+        self.frameCache = frameCache
+        self._fps = info.fps
+        self.duration = info.duration
+        self._frameCount = info.frameCount
+        self._frameSize = info.frameSize
         self.generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.requestedTimeToleranceBefore = .zero
@@ -65,19 +94,28 @@ public actor AVFoundationBackend: VideoBackend {
     nonisolated public var fps: Double? { _fps }
 
     public func frame(at index: Int) async throws -> CGImage {
+        try await frame(at: index, tolerance: .exact)
+    }
+
+    public func frame(at index: Int, tolerance: SeekTolerance) async throws -> CGImage {
         guard index >= 0 && index < _frameCount else {
             throw SleapIOError.videoError("Frame index \(index) out of range [0, \(_frameCount))")
-        }
-
-        // Check prefetch cache first
-        if let cached = prefetchCache[index] {
-            return cached
         }
 
         let time = CMTimeMakeWithSeconds(
             Double(index) / _fps,
             preferredTimescale: duration.timescale
         )
+
+        switch tolerance {
+        case .exact:
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+        case .adaptive:
+            let halfFrame = CMTimeMake(value: 1, timescale: Int32(_fps * 2))
+            generator.requestedTimeToleranceBefore = halfFrame
+            generator.requestedTimeToleranceAfter = halfFrame
+        }
 
         let (image, _) = try await generator.image(at: time)
         return image
@@ -95,20 +133,23 @@ public actor AVFoundationBackend: VideoBackend {
         let timescale = duration.timescale
         let frameCount = _frameCount
         let assetRef = self.asset
+        let cacheRef = self.frameCache
 
         prefetchTask = Task { [weak self] in
-            guard let self else { return }
+            guard self != nil else { return }
             let prefetchGenerator = AVAssetImageGenerator(asset: assetRef)
             prefetchGenerator.appliesPreferredTrackTransform = true
-            prefetchGenerator.requestedTimeToleranceBefore = .zero
-            prefetchGenerator.requestedTimeToleranceAfter = .zero
+
+            // Use adaptive tolerance for prefetch (speed over accuracy)
+            let halfFrame = CMTimeMake(value: 1, timescale: Int32(fps * 2))
+            prefetchGenerator.requestedTimeToleranceBefore = halfFrame
+            prefetchGenerator.requestedTimeToleranceAfter = halfFrame
 
             for index in indices {
                 guard !Task.isCancelled else { return }
                 guard index >= 0 && index < frameCount else { continue }
 
-                let alreadyCached = await self.prefetchCache[index] != nil
-                if alreadyCached { continue }
+                if cacheRef?.get(index) != nil { continue }
 
                 let time = CMTimeMakeWithSeconds(
                     Double(index) / fps,
@@ -118,20 +159,11 @@ public actor AVFoundationBackend: VideoBackend {
                 do {
                     let (image, _) = try await prefetchGenerator.image(at: time)
                     guard !Task.isCancelled else { return }
-                    await self._storePrefetchedFrame(image, at: index)
+                    cacheRef?.set(image, for: index)
                 } catch {
                     continue
                 }
             }
         }
-    }
-
-    /// Store a prefetched frame in the cache (actor-isolated helper).
-    private func _storePrefetchedFrame(_ image: CGImage, at index: Int) {
-        // Evict oldest entries when cache exceeds limit
-        if prefetchCache.count >= Self.maxPrefetchCacheSize {
-            prefetchCache.removeAll(keepingCapacity: true)
-        }
-        prefetchCache[index] = image
     }
 }

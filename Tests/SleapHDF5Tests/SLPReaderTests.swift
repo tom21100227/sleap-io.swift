@@ -488,4 +488,72 @@ final class SLPReaderTests: XCTestCase {
             "ROI/mask fixture should have ROIs or masks"
         )
     }
+
+    // MARK: - Video.frameCount from SLP metadata
+
+    func testDecodeVideo_withShape_setsFrameCountAndFrameSize() {
+        let dict: [String: Any] = [
+            "backend": [
+                "filename": "video.mp4",
+                "type": "media",
+                "shape": [100, 480, 640, 3],
+            ] as [String: Any]
+        ]
+
+        let video = SLPVideoTable.decodeVideo(from: dict)
+
+        XCTAssertEqual(video.frameCount, 100)
+        XCTAssertNotNil(video.frameSize)
+        XCTAssertEqual(video.frameSize?.height, 480)
+        XCTAssertEqual(video.frameSize?.width, 640)
+        XCTAssertEqual(video.frameSize?.channels, 3)
+    }
+
+    func testDecodeVideo_withoutShape_leavesFrameCountAndFrameSizeNil() {
+        let dict: [String: Any] = [
+            "backend": [
+                "filename": "video.mp4",
+                "type": "media",
+            ] as [String: Any]
+        ]
+
+        let video = SLPVideoTable.decodeVideo(from: dict)
+
+        XCTAssertNil(video.frameCount)
+        XCTAssertNil(video.frameSize)
+    }
+
+    func testDecodeVideo_roundTrip_shapeWrittenAndPreserved() async throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "shape_test.mp4")
+        video.frameCount = 200
+        video.frameSize = (height: 720, width: 1280, channels: 3)
+
+        let frame = LabeledFrame(
+            video: video,
+            frameIndex: 0,
+            instances: [Instance(skeleton: skeleton)]
+        )
+        let labels = Labels(
+            frameStore: EagerFrameStore(frames: [frame]),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: []
+        )
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        try await labels.save(to: outputURL)
+
+        let reloaded = try await Labels.loadEager(from: outputURL)
+
+        XCTAssertEqual(reloaded.videos.count, 1)
+        let reloadedVideo = reloaded.videos[0]
+        XCTAssertEqual(reloadedVideo.frameCount, 200)
+        XCTAssertNotNil(reloadedVideo.frameSize)
+        XCTAssertEqual(reloadedVideo.frameSize?.height, 720)
+        XCTAssertEqual(reloadedVideo.frameSize?.width, 1280)
+        XCTAssertEqual(reloadedVideo.frameSize?.channels, 3)
+    }
 }

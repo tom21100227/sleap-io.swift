@@ -93,7 +93,8 @@ extension Video {
             switch backendType {
             case "media", "MediaVideo":
                 let url = URL(fileURLWithPath: filename)
-                backend = try await AVFoundationBackend(url: url)
+                let cache = frameCache
+                backend = try await AVFoundationBackend(url: url, frameCache: cache)
             case "imageSequence", "ImageVideo":
                 let url = URL(fileURLWithPath: filename)
                 backend = try ImageSequenceBackend(directory: url)
@@ -119,15 +120,28 @@ extension Video {
 
     /// Extract a single frame by index.
     public func frame(at index: Int) async throws -> CGImage {
-        // Check cache first
-        if let cached = frameCache.get(index) { return cached }
+        try await frame(at: index, tolerance: .exact)
+    }
+
+    /// Extract a single frame by index with seek tolerance control.
+    ///
+    /// - `.exact`: uses the frame cache (current default behavior).
+    /// - `.adaptive`: bypasses the cache so approximate frames don't pollute exact entries.
+    public func frame(at index: Int, tolerance: SeekTolerance) async throws -> CGImage {
+        if case .exact = tolerance, let cached = frameCache.get(index) {
+            return cached
+        }
 
         guard let be = backend else {
             throw SleapIOError.videoError("Video backend not opened. Call open() first.")
         }
 
-        let image = try await be.frame(at: index)
-        frameCache.set(image, for: index)
+        let image = try await be.frame(at: index, tolerance: tolerance)
+
+        if case .exact = tolerance {
+            frameCache.set(image, for: index)
+        }
+
         return image
     }
 

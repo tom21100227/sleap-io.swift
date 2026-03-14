@@ -298,4 +298,76 @@ final class ModelIdentityTests: XCTestCase {
         XCTAssertTrue(skeleton.node(named: "thorax") === thorax)
         XCTAssertNil(skeleton.node(named: "nonexistent"))
     }
+
+    // MARK: - LabeledFrame.addInstance convenience
+
+    func testAddInstance_returnedInstanceHasCorrectSkeleton() {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "test.mp4")
+        let frame = LabeledFrame(video: video, frameIndex: 0)
+
+        let instance = frame.addInstance(skeleton: skeleton)
+
+        XCTAssertTrue(instance.skeleton === skeleton)
+    }
+
+    func testAddInstance_returnedInstanceHasCorrectTrack() {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "test.mp4")
+        let frame = LabeledFrame(video: video, frameIndex: 0)
+        let track = Track(name: "animal_0")
+
+        let instance = frame.addInstance(skeleton: skeleton, track: track)
+
+        XCTAssertTrue(instance.track === track)
+    }
+
+    func testAddInstance_returnedInstanceHasNilTrackWhenOmitted() {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "test.mp4")
+        let frame = LabeledFrame(video: video, frameIndex: 0)
+
+        let instance = frame.addInstance(skeleton: skeleton)
+
+        XCTAssertNil(instance.track)
+    }
+
+    func testAddInstance_instanceIsAppendedToFrameList() {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "test.mp4")
+        let frame = LabeledFrame(video: video, frameIndex: 0)
+        XCTAssertEqual(frame.instances.count, 0)
+
+        let instance = frame.addInstance(skeleton: skeleton)
+
+        XCTAssertEqual(frame.instances.count, 1)
+        XCTAssertTrue(frame.instances[0] === instance)
+    }
+
+    func testAddInstance_returnedInstanceIsIdentityStableWithLast() {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "test.mp4")
+        let frame = LabeledFrame(video: video, frameIndex: 0)
+
+        let instance = frame.addInstance(skeleton: skeleton)
+
+        XCTAssertTrue(instance === frame.instances.last)
+    }
+
+    func testAddInstance_multipleCallsAppendMultipleInstances() {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "test.mp4")
+        let frame = LabeledFrame(video: video, frameIndex: 0)
+
+        let inst1 = frame.addInstance(skeleton: skeleton)
+        let inst2 = frame.addInstance(skeleton: skeleton, track: Track(name: "t1"))
+        let inst3 = frame.addInstance(skeleton: skeleton)
+
+        XCTAssertEqual(frame.instances.count, 3)
+        XCTAssertTrue(frame.instances[0] === inst1)
+        XCTAssertTrue(frame.instances[1] === inst2)
+        XCTAssertTrue(frame.instances[2] === inst3)
+        XCTAssertFalse(inst1 === inst2)
+        XCTAssertFalse(inst2 === inst3)
+    }
 }

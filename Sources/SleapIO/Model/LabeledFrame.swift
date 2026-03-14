@@ -21,6 +21,14 @@ public final class LabeledFrame: Hashable, @unchecked Sendable {
         self.isNegative = isNegative
     }
 
+    /// Add a new instance to this frame and return it.
+    @discardableResult
+    public func addInstance(skeleton: Skeleton, track: Track? = nil) -> Instance {
+        let instance = Instance(skeleton: skeleton, track: track)
+        instances.append(instance)
+        return instance
+    }
+
     /// All user-labeled (non-predicted) instances.
     public var userInstances: [Instance] {
         instances.filter { !($0 is PredictedInstance) }
