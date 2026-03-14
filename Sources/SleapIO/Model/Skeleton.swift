@@ -48,6 +48,79 @@ public final class Skeleton: Hashable, @unchecked Sendable {
         _rebuildCaches()
     }
 
+    // MARK: - Node migration
+
+    /// Add a node and migrate all instances that reference this skeleton.
+    ///
+    /// The new node is appended to the skeleton's node list. For each instance,
+    /// a new invisible point with NaN coordinates is appended to its `PointsArray`.
+    /// For `PredictedInstance` objects, the corresponding score is set to 0.
+    ///
+    /// - Parameters:
+    ///   - node: The node to add. If a node with the same name already exists, this is a no-op.
+    ///   - instances: All instances referencing this skeleton that should be migrated.
+    public func addNode(_ node: Node, migratingInstances instances: [Instance]) {
+        guard _nameToNode[node.name] == nil else { return }
+
+        let idx = nodes.count
+        nodes.append(node)
+        _nameToNode[node.name] = node
+        _nodeToIndex[ObjectIdentifier(node)] = idx
+
+        for instance in instances {
+            guard instance.skeleton === self else { continue }
+
+            if let predicted = instance as? PredictedInstance {
+                predicted.predictedPoints.points.coordinates.append(Float.nan)
+                predicted.predictedPoints.points.coordinates.append(Float.nan)
+                predicted.predictedPoints.points.visibility.append(false)
+                predicted.predictedPoints.points.completeness.append(false)
+                predicted.predictedPoints.scores.append(0)
+            } else {
+                instance.points.coordinates.append(Float.nan)
+                instance.points.coordinates.append(Float.nan)
+                instance.points.visibility.append(false)
+                instance.points.completeness.append(false)
+            }
+        }
+    }
+
+    /// Remove a node and migrate all instances that reference this skeleton.
+    ///
+    /// The node is removed from the skeleton's node list, and any edges or symmetries
+    /// referencing it are also removed. For each instance, the point at the node's
+    /// index is dropped from its `PointsArray`.
+    ///
+    /// - Parameters:
+    ///   - node: The node to remove.
+    ///   - instances: All instances referencing this skeleton that should be migrated.
+    /// - Throws: ``SleapIOError/invalidSkeleton(_:)`` if the node is not part of this skeleton.
+    public func removeNode(_ node: Node, migratingInstances instances: [Instance]) throws {
+        guard let idx = _nodeToIndex[ObjectIdentifier(node)] else {
+            throw SleapIOError.invalidSkeleton("Node '\(node.name)' not found in skeleton '\(name)'")
+        }
+
+        nodes.remove(at: idx)
+        edges.removeAll { $0.source === node || $0.destination === node }
+        symmetries.removeAll { $0.nodeA === node || $0.nodeB === node }
+        _rebuildCaches()
+
+        for instance in instances {
+            guard instance.skeleton === self else { continue }
+
+            if let predicted = instance as? PredictedInstance {
+                predicted.predictedPoints.points.coordinates.removeSubrange((idx * 2)..<(idx * 2 + 2))
+                predicted.predictedPoints.points.visibility.remove(at: idx)
+                predicted.predictedPoints.points.completeness.remove(at: idx)
+                predicted.predictedPoints.scores.remove(at: idx)
+            } else {
+                instance.points.coordinates.removeSubrange((idx * 2)..<(idx * 2 + 2))
+                instance.points.visibility.remove(at: idx)
+                instance.points.completeness.remove(at: idx)
+            }
+        }
+    }
+
     // MARK: - Edge management
 
     public func addEdge(from source: Node, to destination: Node) {

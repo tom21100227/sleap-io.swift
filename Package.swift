@@ -1,12 +1,31 @@
 // swift-tools-version: 5.9
 
+import Foundation
 import PackageDescription
+
+// Use system HDF5 (via Homebrew) instead of vendored XCFramework:
+//   USE_SYSTEM_HDF5=1 swift build
+//
+// Default: vendored XCFramework (supports macOS + iPadOS, no brew required).
+// System: uses whatever libhdf5 is installed (macOS only, useful for benchmarking).
+let useSystemHDF5 = ProcessInfo.processInfo.environment["USE_SYSTEM_HDF5"] != nil
+
+let chdf5Target: Target = useSystemHDF5
+    ? .systemLibrary(
+        name: "CHDF5",
+        pkgConfig: "hdf5",
+        providers: [.brew(["hdf5"])]
+    )
+    : .binaryTarget(
+        name: "CHDF5",
+        path: "Frameworks/CHDF5.xcframework"
+    )
 
 let package = Package(
     name: "sleap-io",
     platforms: [
         .macOS(.v14),
-        .iOS(.v17),
+        .iOS(.v16),
     ],
     products: [
         .library(name: "SleapIO", targets: ["SleapIO"]),
@@ -19,14 +38,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
     ],
     targets: [
-        // C shim for libhdf5 — exposes HDF5 macros as inline functions
-        .systemLibrary(
-            name: "CHDF5",
-            pkgConfig: "hdf5",
-            providers: [
-                .brew(["hdf5"]),
-            ]
-        ),
+        // HDF5 C library — either vendored XCFramework or system library.
+        // XCFramework built by: Scripts/build-hdf5-xcframework.sh
+        chdf5Target,
 
         // Core model types, codecs, transforms
         .target(

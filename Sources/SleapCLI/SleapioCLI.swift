@@ -4,7 +4,7 @@ import SleapIO
 import SleapHDF5
 
 @main
-struct SleapioCLI: ParsableCommand {
+struct SleapioCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sleapio",
         abstract: "SLEAP pose data inspection and conversion tool",
@@ -12,7 +12,7 @@ struct SleapioCLI: ParsableCommand {
     )
 
     /// When invoked without a subcommand, print usage info and exit with error.
-    mutating func run() throws {
+    mutating func run() async throws {
         throw ValidationError("A subcommand is required. See 'sleapio --help' for usage.")
     }
 }
@@ -76,13 +76,10 @@ private func formatKey(_ format: FileFormat) -> String {
     }
 }
 
-// MARK: - Synchronous loading
+// MARK: - Loading
 
-/// Load labels synchronously from a file path. Dispatches to the appropriate codec.
-///
-/// SLP format is excluded because it requires async (actor-based HDF5 access).
-/// All other formats use synchronous codec read methods.
-private func loadLabelsSync(from path: String, format: String?) throws -> (Labels, FileFormat) {
+/// Load labels from a file path. Dispatches to the appropriate codec.
+private func loadLabels(from path: String, format: String?) async throws -> (Labels, FileFormat) {
     let url = URL(fileURLWithPath: path)
 
     let resolvedFormat: FileFormat
@@ -95,8 +92,7 @@ private func loadLabelsSync(from path: String, format: String?) throws -> (Label
     let labels: Labels
     switch resolvedFormat {
     case .slp:
-        throw SleapIOError.unsupportedFormat(
-            "SLP format requires async loading which is not supported in the CLI. Convert using the library API.")
+        labels = try await SLPReader.read(from: path)
     case .cocoJSON:
         labels = try COCOCodec.read(from: path)
     case .csv:
@@ -121,19 +117,18 @@ private func loadLabelsSync(from path: String, format: String?) throws -> (Label
     return (labels, resolvedFormat)
 }
 
-/// Save labels synchronously to a file path.
+/// Save labels to a file path.
 ///
 /// - Parameters:
 ///   - labels: The labels to save.
 ///   - path: Output file path.
 ///   - format: Target format.
 ///   - jabsNodeNames: Optional JABS node names config path. Required for JABS output.
-private func saveLabelsSync(_ labels: Labels, to path: String, format: FileFormat,
-                            jabsNodeNames: String? = nil) throws {
+private func saveLabels(_ labels: Labels, to path: String, format: FileFormat,
+                        jabsNodeNames: String? = nil) async throws {
     switch format {
     case .slp:
-        throw SleapIOError.unsupportedFormat(
-            "SLP format requires async saving which is not supported in the CLI. Use the library API.")
+        try await SLPWriter.write(labels, to: path)
     case .cocoJSON:
         try COCOCodec.write(labels, to: path)
     case .csv:
@@ -168,7 +163,7 @@ private func saveLabelsSync(_ labels: Labels, to path: String, format: FileForma
 
 // MARK: - InfoCommand
 
-struct InfoCommand: ParsableCommand {
+struct InfoCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "info",
         abstract: "Print dataset summary"
@@ -183,9 +178,9 @@ struct InfoCommand: ParsableCommand {
     @Flag(name: .long, help: "Output as JSON")
     var json: Bool = false
 
-    func run() throws {
-        let (labels, detectedFormat) = try withErrorHandling {
-            try loadLabelsSync(from: input, format: inputFormat)
+    func run() async throws {
+        let (labels, detectedFormat) = try await withErrorHandling {
+            try await loadLabels(from: input, format: inputFormat)
         }
 
         let frameCount = labels.frameCount
@@ -228,7 +223,7 @@ struct InfoCommand: ParsableCommand {
 
 // MARK: - ShowCommand
 
-struct ShowCommand: ParsableCommand {
+struct ShowCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "show",
         abstract: "Show frame-level detail"
@@ -249,9 +244,9 @@ struct ShowCommand: ParsableCommand {
     @Flag(name: .long, help: "Output as JSON")
     var json: Bool = false
 
-    func run() throws {
-        let (labels, _) = try withErrorHandling {
-            try loadLabelsSync(from: input, format: inputFormat)
+    func run() async throws {
+        let (labels, _) = try await withErrorHandling {
+            try await loadLabels(from: input, format: inputFormat)
         }
 
         let totalFrames = labels.frameCount
@@ -344,7 +339,7 @@ struct ShowCommand: ParsableCommand {
 
 // MARK: - ConvertCommand
 
-struct ConvertCommand: ParsableCommand {
+struct ConvertCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "convert",
         abstract: "Convert between formats"
@@ -378,7 +373,7 @@ struct ConvertCommand: ParsableCommand {
     @Option(name: .long, help: "JABS node names file")
     var jabsNodeNames: String?
 
-    func run() throws {
+    func run() async throws {
         // Check output doesn't already exist (unless --force)
         if !force && FileManager.default.fileExists(atPath: output) {
             FileHandle.standardError.write(
@@ -387,8 +382,8 @@ struct ConvertCommand: ParsableCommand {
         }
 
         // Load input
-        let (labels, _) = try withErrorHandling {
-            try loadLabelsSync(from: input, format: inputFormat)
+        let (labels, _) = try await withErrorHandling {
+            try await loadLabels(from: input, format: inputFormat)
         }
 
         // Determine output format
@@ -401,8 +396,8 @@ struct ConvertCommand: ParsableCommand {
         }
 
         // Save
-        try withErrorHandling {
-            try saveLabelsSync(labels, to: output, format: outFormat, jabsNodeNames: jabsNodeNames)
+        try await withErrorHandling {
+            try await saveLabels(labels, to: output, format: outFormat, jabsNodeNames: jabsNodeNames)
         }
 
         print("Converted \(input) -> \(output) (\(formatDisplayName(outFormat)))")
@@ -415,6 +410,19 @@ struct ConvertCommand: ParsableCommand {
 private func withErrorHandling<T>(_ block: () throws -> T) throws -> T {
     do {
         return try block()
+    } catch let error as SleapIOError {
+        printError(error)
+        throw ExitCode(1)
+    } catch {
+        FileHandle.standardError.write(Data("Error: \(error.localizedDescription)\n".utf8))
+        throw ExitCode(1)
+    }
+}
+
+/// Execute an async throwing closure, converting SleapIOError to stderr output + ExitCode(1).
+private func withErrorHandling<T>(_ block: () async throws -> T) async throws -> T {
+    do {
+        return try await block()
     } catch let error as SleapIOError {
         printError(error)
         throw ExitCode(1)

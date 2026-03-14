@@ -83,8 +83,9 @@ extension Video {
 
     /// Open the video backend based on `backendType`.
     ///
-    /// - "media": AVFoundation backend for video files
-    /// - "imageSequence": Image directory backend
+    /// - "media", "MediaVideo": AVFoundation backend for video files
+    /// - "imageSequence", "ImageVideo": Image directory backend
+    /// - "hdf5", "HDF5Video": Embedded HDF5 video (requires loading through Labels.load)
     public func open() async throws {
         if let opener = backendOpener {
             backend = try await opener()
@@ -96,6 +97,10 @@ extension Video {
             case "imageSequence", "ImageVideo":
                 let url = URL(fileURLWithPath: filename)
                 backend = try ImageSequenceBackend(directory: url)
+            case "hdf5", "HDF5Video":
+                throw SleapIOError.videoError(
+                    "HDF5 video backend requires loading through Labels.load(from:). " +
+                    "The embedded video backend is configured automatically during SLP file loading.")
             default:
                 throw SleapIOError.videoError("Unknown backend type: \(backendType)")
             }

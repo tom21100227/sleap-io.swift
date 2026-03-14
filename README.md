@@ -2,7 +2,7 @@
 
 Native Swift library for reading, writing, and manipulating [SLEAP](https://sleap.ai) pose tracking data. Foundation layer for `sleap.swift` (training/inference) and `sleap-label.swift` (annotation GUI).
 
-**Platforms:** macOS 14+ / iOS 17+ (Apple only)
+**Platforms:** Apple platforms. HDF5-backed I/O is currently validated on macOS; iPad deployment for `SleapHDF5` still needs a portable libhdf5 packaging story.
 
 ## Supported Formats
 
@@ -75,6 +75,15 @@ uv run --with sleap-io --with h5py --with Pillow python3 Tests/Fixtures/generate
 swift test
 ```
 
+For local real-world stress assets in `Tests/Fixtures/stress/`, there is also
+a reproducible Swift-vs-Python benchmark harness:
+
+```bash
+python3 Benchmarks/compare_with_python.py \
+  --fixtures-dir Tests/Fixtures/stress \
+  --include-save
+```
+
 ## Architecture
 
 ```
@@ -98,13 +107,24 @@ Sources/
 
 ## Performance
 
-Benchmarked against Python sleap-io 0.6.5 on Apple M4 Max:
+A reproducible local benchmark harness lives in [Benchmarks/README.md](Benchmarks/README.md).
 
-| File | Python | Swift (eager) | Swift (lazy) |
-|------|--------|---------------|--------------|
-| 5k frames, 2.2 MB | 1.65s | 0.03s (55x) | 0.007s (236x) |
-| 540 frames, 183 videos | 0.70s | 0.02s (30x) | 0.02s (33x) |
-| 90k frames, 123 MB | 3.14s | 1.39s (2.3x) | 0.32s (9.8x) |
+It compares the current Swift tip against the latest published Python
+`sleap-io` package on the same local stress fixtures:
+
+```bash
+python3 Benchmarks/compare_with_python.py \
+  --fixtures-dir Tests/Fixtures/stress \
+  --include-save
+```
+
+The benchmark is local-only for now because the large stress fixtures are
+gitignored real-world assets rather than checked-in test data.
+
+For embedded packaged `.pkg.slp` files, current load-time comparisons should be
+treated cautiously: Swift currently does more embedded backend work during
+`load()` than Python `sleap-io`, so follow-up benchmarks should compare
+equivalent work such as first-frame access as well as raw load time.
 
 ## Known Limitations
 

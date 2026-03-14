@@ -1,5 +1,10 @@
 import Foundation
 
+/// Protocol for frame stores that can provide metadata without materialization.
+public protocol FrameMetadataProvider {
+    func frameMetadata() -> [(videoIndex: Int, frameIndex: Int)]
+}
+
 /// Protocol for the internal frame storage backing a Labels instance.
 /// This enables transparent lazy vs eager frame access.
 public protocol FrameStore: AnyObject, Sendable {
@@ -45,6 +50,36 @@ public final class EagerFrameStore: FrameStore, @unchecked Sendable {
 ///
 /// Root of the object graph. Owns all labeled frames, videos,
 /// skeletons, tracks, and associated metadata.
+///
+/// ## Lazy vs Eager Mode
+///
+/// When loaded from an SLP file (the default), `Labels` uses lazy storage backed by
+/// raw HDF5 column arrays. Frames are materialized into `LabeledFrame` objects on
+/// first access and cached for identity stability.
+///
+/// ### Frame-local edits (work while lazy)
+///
+/// Once a frame has been accessed (and thus cached), its contents are fully mutable:
+///
+/// - **Point edits**: `instance[node] = point` or `instance.points[i] = point`
+/// - **Track reassignment**: `instance.track = newTrack`
+/// - **Adding/removing instances within a cached frame**: `frame.instances.append(inst)`
+///   or `frame.instances.removeAll { $0 is PredictedInstance }`
+///
+/// These edits modify the cached objects in place and do not require materialization.
+///
+/// ### Labels-level mutations (require `materialize()` first)
+///
+/// Structural mutations that change the frame list or identity tables throw
+/// ``SleapIOError/mutationWhileLazy(_:)`` unless the store has been fully materialized:
+///
+/// - `addFrame(_:)`, `removeFrame(_:)` -- modify the frame list
+/// - `clearPredictions()` -- iterates and mutates all frames
+/// - `merge(from:strategy:)` -- merges another Labels graph
+/// - `setVideos(_:)`, `setSkeletons(_:)`, `setTracks(_:)` -- replace identity tables
+///
+/// Call ``materialize()`` to convert the lazy store into an eager array before
+/// performing any of these operations.
 public final class Labels: @unchecked Sendable {
 
     // MARK: - Internal frame storage
@@ -188,6 +223,33 @@ public final class Labels: @unchecked Sendable {
             }
         }
         return indices
+    }
+
+    /// Frame metadata for index building.
+    ///
+    /// Returns `(videoIndex, frameIndex)` pairs for every labeled frame.
+    /// When lazy, reads directly from the column store without materializing
+    /// any frame objects. When eager, iterates materialized frames.
+    public func frameMetadata() -> [(videoIndex: Int, frameIndex: Int)] {
+        // Fast path: delegate to lazy store to avoid materializing frames
+        if let lazyStore = frameStore as? FrameMetadataProvider {
+            return lazyStore.frameMetadata()
+        }
+
+        // Eager path: iterate materialized frames
+        var videoIndexMap: [ObjectIdentifier: Int] = [:]
+        for (i, v) in _videos.enumerated() {
+            videoIndexMap[ObjectIdentifier(v)] = i
+        }
+
+        var result = [(videoIndex: Int, frameIndex: Int)]()
+        result.reserveCapacity(frameStore.count)
+        for i in 0..<frameStore.count {
+            let f = frameStore.frame(at: i)
+            let vidIdx = videoIndexMap[ObjectIdentifier(f.video)] ?? 0
+            result.append((videoIndex: vidIdx, frameIndex: f.frameIndex))
+        }
+        return result
     }
 
     // MARK: - Structural mutation (requires materialized state)

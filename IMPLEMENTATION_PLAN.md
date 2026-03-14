@@ -13,6 +13,7 @@ See also:
 - [API_DESIGN.md](./API_DESIGN.md) — Full public API surface specification
 - [PHASE3_SPEC.md](./PHASE3_SPEC.md) — Phase 3 interchange codec behavior
 - [PHASE4_SPEC.md](./PHASE4_SPEC.md) — Phase 4 advanced I/O + CLI behavior
+- [HDF5_IPADOS_STRATEGY.md](./HDF5_IPADOS_STRATEGY.md) — HDF5 deployment options for downstream iPad apps
 - [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) — Release gate and go/no-go checklist
 
 ---
@@ -737,6 +738,56 @@ Not implemented. NWB requires implementing a subset of HDMF schema handling over
 
 ---
 
+## Post-Release Roadmap
+
+These items are intentionally deferred. They are not required to complete
+Phases 1 through 4, but they are important follow-up work for performance and
+benchmark credibility.
+
+### Embedded Packaged Video Load Path
+
+- Make embedded `.pkg.slp` backend setup metadata-only during `Labels.load()`
+  and `Labels.loadEager()`.
+- Defer reading embedded image payloads until `Video.open()` or first
+  `frame(at:)`.
+- Avoid reopening and rehydrating embedded HDF5 backends when the backend is
+  already initialized.
+- Goal: bring embedded packaged-file label load behavior closer to Python
+  `sleap-io`, which appears to defer embedded frame hydration until frame
+  access.
+
+### Benchmark Parity
+
+- Treat embedded packaged-file `load()` timings with care: current Swift and
+  Python loaders are not measuring equivalent work on those files.
+- Extend the benchmark harness to record equivalent embedded metrics on both
+  sides:
+  - metadata-only label load
+  - first embedded frame access
+  - small sequential embedded frame scan
+- Only make public Swift-vs-Python claims from equivalent-work comparisons.
+
+### Portable HDF5 And iPad Deployment
+
+- Current HDF5 support is implemented through `CHDF5` as a system library
+  target with a Homebrew-based macOS development setup.
+- That is not, by itself, a shippable iPadOS packaging story for downstream
+  apps like `sleap.swift` or `sleap-label.swift`.
+- Before claiming iPad support for HDF5-backed formats, choose and implement
+  one explicit deployment strategy:
+  - vendor libhdf5 as an Apple-platform binary artifact / XCFramework
+  - ship a statically linked HDF5 build for supported Apple mobile targets
+  - or split the package so non-HDF5 modules remain iPad-ready while
+    `SleapHDF5` is macOS-only until portable packaging exists
+- Release notes and platform docs must distinguish:
+  - Apple-platform model/rendering code
+  - macOS-validated HDF5 I/O
+  - true iPad-deployable HDF5 support
+- Treat this as a downstream-integration blocker for `sleap.swift`, not as a
+  minor packaging nicety.
+
+---
+
 ## Cross-Cutting Concerns
 
 ### Concurrency Model
@@ -782,3 +833,126 @@ All I/O operations `throw`. No `Result`, no optionals for error cases.
 No other external Swift package dependencies. The library intentionally minimizes dependencies for downstream integration simplicity.
 Read-only import aligned to the Python `sleap-io` supported subset and the
 fixture contract defined in `PHASE3_SPEC.md`.
+
+---
+
+## iPad Compatibility Requirements (from sleap.swift GUI)
+
+The following issues were identified during development of the native macOS/iPadOS
+SLEAP labelling GUI (`sleap.swift`). They block iPadOS support and affect
+large-file performance on macOS.
+
+### 1. SLP I/O is not portable to iPadOS (CRITICAL — blocks iPad entirely)
+
+**Problem:** All `.slp` load/save entry points live in `SleapHDF5`, which depends
+on `CHDF5` (a system library target requiring `brew install hdf5`). There is no
+way to install native HDF5 on iPadOS, so `.slp` files cannot be opened on iPad
+at all — including `.pkg.slp` files with embedded frames.
+
+**Impact:** The GUI app cannot ship an iPadOS target until this is resolved.
+
+**Related decision doc:** See `HDF5_IPADOS_STRATEGY.md` for the packaging-focused
+comparison of XCFramework vs static HDF5 build vs keeping `SleapHDF5`
+macOS-only for now. The options below are broader product-level alternatives.
+
+**Proposed solutions (in order of preference):**
+
+1. **Portable bundle format** — Define a non-HDF5 file format (e.g., JSON
+   metadata + embedded frame images in a directory or zip bundle) with load/save
+   entry points in `SleapIO` (no native dependency). This would allow iPadOS to
+   open a subset of SLEAP files without HDF5.
+
+2. **Pure-Swift HDF5 reader** — Implement enough of the HDF5 spec in pure Swift
+   to read `.slp` files. This eliminates the C dependency entirely but is a
+   significant engineering effort.
+
+3. **Mac-side export tool** — Add an "Export for iPad" command that converts
+   `.slp` → portable format. This is a workaround, not a fix, but unblocks
+   iPad viewing without changing the core I/O layer.
+
+**Where the dependency chain is:**
+
+- `Labels.load(from:)` and `Labels.save(to:)` are extensions in
+  `Sources/SleapHDF5/SLP/LabelsIO.swift`
+- `SleapHDF5` depends on `CHDF5` (system library) in `Package.swift:26`
+- `CHDF5` requires `pkgConfig: "hdf5"` which needs `brew install hdf5`
+
+### 2. Frame metadata without materialization (HIGH — blocks lazy-loading perf)
+
+**Problem:** The GUI needs to build a `FrameIndex` mapping
+`(video, frameIndex) → store position` for O(1) navigation. Currently the only
+way to get video identity and frame index for each entry is
+`labels.frameStore.frame(at: i)`, which materializes every lazy frame object.
+This defeats lazy loading for large files.
+
+**Impact:** Opening a 180k-frame `.slp` file forces full materialization at load
+time (~200ms minimum), eliminating the memory and startup-time benefits of lazy
+loading.
+
+**Proposed API addition:**
+
+```swift
+// On FrameStore or Labels — return column-level metadata without materializing
+// frame objects or their instances:
+public func frameMetadata() -> [(videoIndex: Int, frameIndex: Int)]
+
+// Or expose the video/frame index columns directly on LazyFrameList:
+public var videoIndices: [Int] { get }   // column from the HDF5 frame table
+public var frameIndices: [Int] { get }   // column from the HDF5 frame table
+```
+
+This would let the GUI build its index in O(n) time with O(n) memory for
+metadata only, without touching the instance data or creating LabeledFrame
+objects.
+
+### 3. AVFoundation prefetch is a no-op (MEDIUM — scrubbing performance)
+
+**Problem:** `Video.prefetch(indices:)` forwards to the backend, but
+`AVFoundationBackend.prefetch(indices:)` does nothing. The GUI relies on
+prefetching nearby frames during timeline scrubbing for smooth playback.
+
+**Impact:** Scrubbing through video relies entirely on the `FrameCache` hit rate.
+Sequential scrubbing works (cache is warm), but jumping or fast-dragging the
+seekbar may stutter.
+
+**Proposed fix:** Implement prefetch in `AVFoundationBackend` using
+`AVAssetImageGenerator` with `requestedTimeToleranceBefore/After` set
+appropriately for approximate frame generation.
+
+### 4. Skeleton editing requires instance migration (MEDIUM — Phase 2 GUI)
+
+**Problem:** `Skeleton` supports add/remove node/edge, but `PointsArray` has a
+fixed point count set at initialization (from `skeleton.nodes.count`). When a
+node is added or removed from the skeleton, all existing `Instance` objects have
+misaligned point storage.
+
+**Impact:** The GUI's skeleton editor (Phase 2) cannot add/remove nodes without
+manually migrating every instance's `PointsArray`. This is error-prone and
+should be a library-level operation.
+
+**Proposed API additions:**
+
+```swift
+extension Skeleton {
+    /// Add a node and migrate all instances that reference this skeleton.
+    /// New points are initialized as invisible with NaN coordinates.
+    public func addNode(_ node: Node, migratingInstances instances: [Instance])
+
+    /// Remove a node and migrate all instances that reference this skeleton.
+    /// Points at the removed index are dropped.
+    public func removeNode(_ node: Node, migratingInstances instances: [Instance])
+}
+```
+
+### 5. Lazy mutation rules documentation (LOW — correctness)
+
+**Clarification needed:** Frame-local edits on already-materialized lazy frames
+do work without calling `labels.materialize()`:
+- Point edits (`instance[node] = point`)
+- Track reassignment (`instance.track = newTrack`)
+- Adding/removing instances within a cached frame (`frame.instances.append(...)`)
+
+Only `Labels`-level structural mutations (addFrame, removeFrame, clearPredictions,
+merge) require full materialization. The GUI exploits this distinction to keep
+large files lazy for as long as possible during editing. It would be helpful to
+document this in the `Labels` API or `CLAUDE.md`.

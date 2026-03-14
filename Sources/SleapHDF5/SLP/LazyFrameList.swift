@@ -4,7 +4,7 @@ import SleapIO
 /// A lazy frame list that materializes LabeledFrame objects on demand from column store data.
 /// Conforms to FrameStore for use as the backing store in Labels.
 /// Identity-stable: repeated access to the same index returns the same object.
-public final class LazyFrameList: FrameStore, @unchecked Sendable {
+public final class LazyFrameList: FrameStore, FrameMetadataProvider, @unchecked Sendable {
     let store: LazyDataStore
 
     /// Cache of already-materialized frames. Keyed by row index.
@@ -57,6 +57,50 @@ public final class LazyFrameList: FrameStore, @unchecked Sendable {
             }
         }
         return count
+    }
+
+    // MARK: - Frame metadata (no materialization)
+
+    /// Resolved video indices from the column store (shared computation).
+    private func resolvedVideoIndices() -> [Int] {
+        let n = store.framesData.count
+        var result = [Int]()
+        result.reserveCapacity(n)
+        for i in 0..<n {
+            let rawVideoID = Int(store.framesData.video[i])
+            let videoIdx = SLPVideoTable.resolvedIndex(
+                for: rawVideoID,
+                videoIdMap: store.videoIdMap,
+                videoCount: store.videos.count
+            ) ?? 0
+            result.append(videoIdx)
+        }
+        return result
+    }
+
+    /// Return frame metadata without materializing frame objects.
+    ///
+    /// Reads directly from the column store's video and frameIdx arrays,
+    /// resolving raw HDF5 video IDs to actual video indices via the videoIdMap.
+    /// This is O(n) in the number of frames but does not allocate any model objects.
+    public func frameMetadata() -> [(videoIndex: Int, frameIndex: Int)] {
+        let vidIndices = resolvedVideoIndices()
+        return vidIndices.enumerated().map { (i, vidIdx) in
+            (videoIndex: vidIdx, frameIndex: Int(store.framesData.frameIdx[i]))
+        }
+    }
+
+    /// Raw video index column from HDF5 frame table.
+    ///
+    /// Values are resolved through the videoIdMap so they correspond to
+    /// indices into the ``Labels/videos`` array.
+    public var videoIndices: [Int] {
+        resolvedVideoIndices()
+    }
+
+    /// Raw frame index column from HDF5 frame table.
+    public var frameIndices: [Int] {
+        store.framesData.frameIdx.map { Int($0) }
     }
 }
 

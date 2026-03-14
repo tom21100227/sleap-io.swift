@@ -1,0 +1,7 @@
+module CHDF5 {
+    header "hdf5.h"
+    header "chdf5_shim.h"
+    link "hdf5"
+    link "z"
+    export *
+}

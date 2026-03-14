@@ -31,6 +31,9 @@ playground.xcworkspace
 
 .build/
 
+# HDF5 XCFramework build intermediates (source, object files)
+.hdf5-build/
+
 # Generated SLP fixture files are local test artifacts.
 Tests/Fixtures/*.slp
 
@@ -66,3 +69,4 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+__pycache__/

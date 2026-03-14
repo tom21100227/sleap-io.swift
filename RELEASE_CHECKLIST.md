@@ -20,6 +20,7 @@ The release notes must explicitly state:
 2. supported formats
 3. unsupported formats
 4. known limitations that are accepted at release time
+5. whether HDF5-backed I/O is macOS-only or truly deployable on iPadOS
 
 ## Hard Gates
 
@@ -64,6 +65,7 @@ These are required before tagging a release.
 ### 6. Documentation
 
 - [ ] `README.md` reflects the actual supported format matrix
+- [ ] platform support language is precise about current HDF5 deployment status on iPadOS
 - [ ] `PHASE3_SPEC.md` and `PHASE4_SPEC.md` match shipped behavior
 - [ ] phase 5 formats are documented as not yet implemented
 - [ ] CLI usage is documented with at least one concrete example per command
@@ -87,6 +89,8 @@ explicit decision to defer them.
 - [ ] random-access lazy frame reads have been spot-checked on a large file
 - [ ] round-trip write time is acceptable on at least one medium and one large file
 - [ ] no obvious memory blow-up occurs during eager load of a large predictions file
+- [ ] any published Swift-vs-Python performance claim is backed by a fresh run of `Benchmarks/compare_with_python.py`
+- [ ] embedded `.pkg.slp` performance claims are based on equivalent-work metrics, not raw `load()` timing alone
 
 ## Current Release Delta
 

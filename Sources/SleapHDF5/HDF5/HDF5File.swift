@@ -8,12 +8,11 @@ final class HDF5File {
     let path: String
 
     /// Suppress HDF5's default stderr error stack output once on first use.
-    private static let suppressErrorStack: Void = {
+    static let suppressErrorStack: Void = {
         shim_H5E_suppress()
     }()
 
     private init(id: hid_t, path: String) {
-        _ = Self.suppressErrorStack
         self.id = id
         self.path = path
     }
@@ -26,6 +25,7 @@ final class HDF5File {
 
     /// Open an existing HDF5 file for reading.
     static func openReadOnly(path: String) throws -> HDF5File {
+        _ = suppressErrorStack
         let fid = H5Fopen(path, shim_H5F_ACC_RDONLY(), shim_H5P_DEFAULT())
         guard fid >= 0 else {
             throw HDF5Error.openFailed("Cannot open file: \(path)")
@@ -35,6 +35,7 @@ final class HDF5File {
 
     /// Open an existing HDF5 file for reading and writing.
     static func openReadWrite(path: String) throws -> HDF5File {
+        _ = suppressErrorStack
         let fid = H5Fopen(path, shim_H5F_ACC_RDWR(), shim_H5P_DEFAULT())
         guard fid >= 0 else {
             throw HDF5Error.openFailed("Cannot open file for writing: \(path)")
@@ -44,6 +45,7 @@ final class HDF5File {
 
     /// Create a new HDF5 file, truncating if it exists.
     static func create(path: String) throws -> HDF5File {
+        _ = suppressErrorStack
         let fid = H5Fcreate(path, shim_H5F_ACC_TRUNC(), shim_H5P_DEFAULT(), shim_H5P_DEFAULT())
         guard fid >= 0 else {
             throw HDF5Error.createFailed("Cannot create file: \(path)")

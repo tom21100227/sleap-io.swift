@@ -11,6 +11,29 @@ final class StressTests: XCTestCase {
 
     // MARK: - Fixture helpers
 
+    private func emitBenchmark(
+        fixture: String,
+        metric: String,
+        seconds: Double,
+        extra: [String: CustomStringConvertible] = [:]
+    ) {
+        var fields = [
+            "BENCHMARK",
+            "source=swift",
+            "fixture=\(fixture)",
+            "metric=\(metric)",
+            "seconds=\(String(format: "%.6f", seconds))",
+        ]
+
+        for key in extra.keys.sorted() {
+            if let value = extra[key] {
+                fields.append("\(key)=\(value)")
+            }
+        }
+
+        print(fields.joined(separator: " "))
+    }
+
     private func stressFixtureURL(_ name: String) throws -> URL {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // SleapHDF5Tests/
@@ -45,7 +68,7 @@ final class StressTests: XCTestCase {
         XCTAssertEqual(labels.instanceCount, 5002)
         XCTAssertEqual(labels.predictedInstanceCount, 5002)
 
-        print("single_predictions lazy load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "single_predictions", metric: "lazy_load", seconds: elapsed)
     }
 
     func testSinglePredictions_eagerLoad() async throws {
@@ -68,7 +91,7 @@ final class StressTests: XCTestCase {
         XCTAssertEqual(last.instances.count, 1)
         XCTAssertTrue(last.instances[0] is PredictedInstance)
 
-        print("single_predictions eager load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "single_predictions", metric: "eager_load", seconds: elapsed)
     }
 
     func testSinglePredictions_lazyRandomAccess() async throws {
@@ -89,7 +112,12 @@ final class StressTests: XCTestCase {
             XCTAssertGreaterThan(visibleCount, 0, "Frame \(i) should have visible points")
         }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
-        print("single_predictions random access (\(indices.count) frames): \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(
+            fixture: "single_predictions",
+            metric: "random_access",
+            seconds: elapsed,
+            extra: ["frames": indices.count]
+        )
 
         // Identity stability: same index returns same object
         let f1 = labels[0]
@@ -135,7 +163,7 @@ final class StressTests: XCTestCase {
         XCTAssertEqual(labels.instanceCount, 540)
         XCTAssertEqual(labels.predictedInstanceCount, 0)
 
-        print("training_mixed lazy load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "training_mixed", metric: "lazy_load", seconds: elapsed)
     }
 
     func testTrainingMixed_eagerLoad() async throws {
@@ -156,7 +184,7 @@ final class StressTests: XCTestCase {
             }
         }
 
-        print("training_mixed eager load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "training_mixed", metric: "eager_load", seconds: elapsed)
     }
 
     func testTrainingMixed_multiVideoIdentity() async throws {
@@ -188,7 +216,7 @@ final class StressTests: XCTestCase {
         XCTAssertEqual(labels.instanceCount, 540)
         XCTAssertEqual(labels.predictedInstanceCount, 0)
 
-        print("training_embedded lazy load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "training_embedded", metric: "lazy_load", seconds: elapsed)
     }
 
     func testTrainingEmbedded_eagerLoad() async throws {
@@ -212,7 +240,7 @@ final class StressTests: XCTestCase {
             }
         }
 
-        print("training_embedded eager load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "training_embedded", metric: "eager_load", seconds: elapsed)
     }
 
     func testTrainingEmbedded_embeddedVideoFrameAccess() async throws {
@@ -227,11 +255,20 @@ final class StressTests: XCTestCase {
         )
 
         // Access an embedded frame (supports both vlen and fixed-length rank-2 datasets)
+        let start = CFAbsoluteTimeGetCurrent()
         try await frame.video.open()
         let image = try await frame.video.frame(at: frame.frameIndex)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
         XCTAssertGreaterThan(image.width, 0)
         XCTAssertGreaterThan(image.height, 0)
         frame.video.close()
+
+        emitBenchmark(
+            fixture: "training_embedded",
+            metric: "embedded_frame_access",
+            seconds: elapsed,
+            extra: ["frame": frame.frameIndex]
+        )
     }
 
     // MARK: - large_predictions.slp (123 MB, 90k frames, 280k predicted instances)
@@ -253,7 +290,7 @@ final class StressTests: XCTestCase {
         // Lazy load of 123 MB should still be fast (metadata only)
         XCTAssertLessThan(elapsed, 5.0, "Lazy load took too long: \(elapsed)s")
 
-        print("large_predictions lazy load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "large_predictions", metric: "lazy_load", seconds: elapsed)
     }
 
     func testLargePredictions_eagerLoad() async throws {
@@ -266,7 +303,7 @@ final class StressTests: XCTestCase {
         XCTAssertEqual(labels.frameCount, 90000)
         XCTAssertEqual(labels.predictedInstanceCount, 280438)
 
-        print("large_predictions eager load: \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(fixture: "large_predictions", metric: "eager_load", seconds: elapsed)
     }
 
     func testLargePredictions_lazyRandomAccess() async throws {
@@ -286,7 +323,12 @@ final class StressTests: XCTestCase {
             }
         }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
-        print("large_predictions random access (\(indices.count) frames): \(String(format: "%.3f", elapsed))s")
+        emitBenchmark(
+            fixture: "large_predictions",
+            metric: "random_access",
+            seconds: elapsed,
+            extra: ["frames": indices.count]
+        )
     }
 
     func testLargePredictions_lazyScanFirst1000() async throws {
@@ -303,7 +345,12 @@ final class StressTests: XCTestCase {
         let elapsed = CFAbsoluteTimeGetCurrent() - start
 
         XCTAssertGreaterThan(totalInstances, 0)
-        print("large_predictions scan 1000 frames: \(String(format: "%.3f", elapsed))s, \(totalInstances) instances")
+        emitBenchmark(
+            fixture: "large_predictions",
+            metric: "scan_1000",
+            seconds: elapsed,
+            extra: ["frames": 1000, "instances": totalInstances]
+        )
     }
 
     func testLargePredictions_instanceDistribution() async throws {
@@ -338,7 +385,10 @@ final class StressTests: XCTestCase {
         let tmpURL = tempURL()
         defer { try? FileManager.default.removeItem(at: tmpURL) }
 
+        let start = CFAbsoluteTimeGetCurrent()
         try await original.save(to: tmpURL)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        emitBenchmark(fixture: "single_predictions", metric: "save", seconds: elapsed)
 
         let reloaded = try await Labels.loadEager(from: tmpURL)
 
@@ -371,7 +421,10 @@ final class StressTests: XCTestCase {
         let tmpURL = tempURL()
         defer { try? FileManager.default.removeItem(at: tmpURL) }
 
+        let start = CFAbsoluteTimeGetCurrent()
         try await original.save(to: tmpURL)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        emitBenchmark(fixture: "training_mixed", metric: "save", seconds: elapsed)
 
         let reloaded = try await Labels.loadEager(from: tmpURL)
 
