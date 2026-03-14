@@ -114,4 +114,4 @@ Benchmarked against Python sleap-io 0.6.5 on Apple M4 Max:
 
 ## License
 
-[TODO: Add license]
+[MIT](LICENSE)
