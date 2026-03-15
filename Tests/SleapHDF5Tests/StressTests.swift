@@ -202,10 +202,7 @@ final class StressTests: XCTestCase {
         XCTAssertLessThanOrEqual(videoSet.count, 183)
     }
 
-    // MARK: - training_embedded.pkg.slp (540 frames, 183 videos, all embedded)
-    // NOTE: This fixture is a truncated copy (268 KB vs 472 MB original).
-    // It has 542 /instances rows (2 extra ghost instances in frame 0) vs
-    // 540 in the source SLP. Assertions match the fixture, not the original.
+    // MARK: - training_embedded.pkg.slp (475 MB, 540 frames, 183 videos, all embedded)
 
     func testTrainingEmbedded_lazyLoad() async throws {
         let url = try stressFixtureURL("training_embedded.pkg.slp")
@@ -216,8 +213,7 @@ final class StressTests: XCTestCase {
         XCTAssertTrue(labels.isLazy)
         XCTAssertEqual(labels.frameCount, 540)
         XCTAssertEqual(labels.videos.count, 183)
-        // Frame 0 has 3 user instances; all other 539 frames have 1 each => 542 total
-        XCTAssertEqual(labels.instanceCount, 542)
+        XCTAssertEqual(labels.instanceCount, 540)
         XCTAssertEqual(labels.predictedInstanceCount, 0)
 
         emitBenchmark(fixture: "training_embedded", metric: "lazy_load", seconds: elapsed)
