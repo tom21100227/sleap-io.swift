@@ -202,9 +202,10 @@ final class StressTests: XCTestCase {
         XCTAssertLessThanOrEqual(videoSet.count, 183)
     }
 
-    // MARK: - Diagnostic
-
     // MARK: - training_embedded.pkg.slp (540 frames, 183 videos, all embedded)
+    // NOTE: This fixture is a truncated copy (268 KB vs 472 MB original).
+    // It has 542 /instances rows (2 extra ghost instances in frame 0) vs
+    // 540 in the source SLP. Assertions match the fixture, not the original.
 
     func testTrainingEmbedded_lazyLoad() async throws {
         let url = try stressFixtureURL("training_embedded.pkg.slp")
