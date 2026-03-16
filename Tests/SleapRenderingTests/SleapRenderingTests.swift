@@ -142,7 +142,7 @@ final class ColorPaletteTests: XCTestCase {
     }
 
     func testCatscalePaletteHas10Colors() {
-        XCTAssertEqual(ColorPalette.catscale.count, 10)
+        XCTAssertEqual(ColorPalette.palette(named: "catscale").count, 10)
     }
 
     func testColorByIndexWrapsAround() {

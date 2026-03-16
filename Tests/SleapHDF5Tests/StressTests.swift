@@ -278,6 +278,92 @@ final class StressTests: XCTestCase {
         )
     }
 
+    // MARK: - large-prediction-tracked.slp (234 MB, 180k frames, 534k predicted instances, 3 tracks)
+
+    func testLargePredictionTracked_lazyLoad() async throws {
+        let url = try stressFixtureURL("large-prediction-tracked.slp")
+        let start = CFAbsoluteTimeGetCurrent()
+        let labels = try await Labels.load(from: url)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+
+        XCTAssertTrue(labels.isLazy)
+        XCTAssertEqual(labels.frameCount, 180000)
+        XCTAssertEqual(labels.videos.count, 1)
+        XCTAssertEqual(labels.skeletons.count, 1)
+        XCTAssertEqual(labels.skeleton?.nodes.count, 15)
+        XCTAssertEqual(labels.tracks.count, 3)
+        XCTAssertEqual(labels.predictedInstanceCount, 533829)
+
+        XCTAssertLessThan(elapsed, 5.0, "Lazy load took too long: \(elapsed)s")
+        emitBenchmark(fixture: "large_prediction_tracked", metric: "lazy_load", seconds: elapsed)
+    }
+
+    func testLargePredictionTracked_eagerLoad() async throws {
+        let url = try stressFixtureURL("large-prediction-tracked.slp")
+        let start = CFAbsoluteTimeGetCurrent()
+        let labels = try await Labels.loadEager(from: url)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+
+        XCTAssertFalse(labels.isLazy)
+        XCTAssertEqual(labels.frameCount, 180000)
+        XCTAssertEqual(labels.predictedInstanceCount, 533829)
+
+        emitBenchmark(fixture: "large_prediction_tracked", metric: "eager_load", seconds: elapsed)
+    }
+
+    func testLargePredictionTracked_trackAssignment() async throws {
+        let url = try stressFixtureURL("large-prediction-tracked.slp")
+        let labels = try await Labels.load(from: url)
+
+        XCTAssertEqual(labels.tracks.count, 3)
+
+        // Sample frames and verify track assignment
+        let sampleIndices = [0, 1, 100, 50000, 100000, 179999]
+        for i in sampleIndices {
+            let frame = labels[i]
+            XCTAssertGreaterThanOrEqual(frame.instances.count, 1,
+                "Frame \(i): expected at least 1 instance")
+            for inst in frame.instances {
+                XCTAssertTrue(inst is PredictedInstance, "Frame \(i): expected predicted")
+                XCTAssertNotNil(inst.track, "Frame \(i): expected track assignment")
+                XCTAssertEqual(inst.points.count, 15, "Frame \(i): wrong point count")
+            }
+        }
+
+        // Verify all 3 tracks are used across the dataset
+        var tracksSeen = Set<ObjectIdentifier>()
+        for i in stride(from: 0, to: labels.frameCount, by: 1000) {
+            let frame = labels[i]
+            for inst in frame.instances {
+                if let track = inst.track {
+                    tracksSeen.insert(ObjectIdentifier(track))
+                }
+            }
+        }
+        XCTAssertEqual(tracksSeen.count, 3, "Expected all 3 tracks to appear")
+    }
+
+    func testLargePredictionTracked_lazyScanFirst1000() async throws {
+        let url = try stressFixtureURL("large-prediction-tracked.slp")
+        let labels = try await Labels.load(from: url)
+
+        let start = CFAbsoluteTimeGetCurrent()
+        var totalInstances = 0
+        for i in 0..<1000 {
+            let frame = labels[i]
+            totalInstances += frame.instances.count
+        }
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+
+        XCTAssertGreaterThan(totalInstances, 0)
+        emitBenchmark(
+            fixture: "large_prediction_tracked",
+            metric: "scan_1000",
+            seconds: elapsed,
+            extra: ["frames": 1000, "instances": totalInstances]
+        )
+    }
+
     // MARK: - large_predictions.slp (123 MB, 90k frames, 280k predicted instances)
 
     func testLargePredictions_lazyLoad() async throws {
