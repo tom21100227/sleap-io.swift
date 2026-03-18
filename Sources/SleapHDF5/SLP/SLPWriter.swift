@@ -138,6 +138,13 @@ public struct SLPWriter {
             backend["filename"] = video.filename
             backend["type"] = video.backendType
 
+            // Preserve original path provenance only while a permanent relocation is active.
+            if video.persistedFilename != nil {
+                backend["original_filename"] = video.originalFilename
+            } else {
+                backend.removeValue(forKey: "original_filename")
+            }
+
             // Persist shape if available but not already in metadata
             if backend["shape"] == nil,
                let fc = video.frameCount,
@@ -154,7 +161,7 @@ public struct SLPWriter {
 
     private static func writeEmbeddedVideos(_ videos: [Video], file: HDF5File) throws {
         for (index, video) in videos.enumerated() {
-            guard video.backendType == "hdf5" else { continue }
+            guard video.backendType.lowercased().hasPrefix("hdf5") else { continue }
             guard let backend = video.backend as? SleapHDF5EmbeddedVideoBackend else { continue }
 
             // Try H5Ocopy from the source file (preserves all frame data without loading into memory).

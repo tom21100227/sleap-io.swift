@@ -364,4 +364,46 @@ final class iPadOSCompatibilityTests: XCTestCase {
         XCTAssertEqual(labels.predictedInstanceCount, 1)
         XCTAssertTrue(labels.skeleton === skeleton)
     }
+
+    // MARK: - Video Relocation API
+
+    func testVideoOriginalFilenameIsImmutable() {
+        let video = Video(filename: "/original/path.mp4")
+        XCTAssertEqual(video.originalFilename, "/original/path.mp4")
+        // originalFilename is `let` — cannot be modified after construction
+    }
+
+    func testVideoEffectivePathWithoutRelocation() {
+        let video = Video(filename: "/data/video.mp4")
+        XCTAssertNil(video.persistedFilename)
+        XCTAssertEqual(video.filename, "/data/video.mp4")
+        XCTAssertEqual(video.filename, video.originalFilename)
+    }
+
+    func testVideoEffectivePathWithPermanentRelocation() {
+        let video = Video(filename: "/linux/train/video.mp4")
+        video.persistedFilename = "/ipad/Documents/video.mp4"
+
+        XCTAssertEqual(video.originalFilename, "/linux/train/video.mp4")
+        XCTAssertEqual(video.persistedFilename, "/ipad/Documents/video.mp4")
+        XCTAssertEqual(video.filename, "/ipad/Documents/video.mp4")
+    }
+
+    func testVideoTemporaryRelocationDoesNotMutatePersisted() {
+        let video = Video(filename: "/linux/train/video.mp4")
+
+        // Temporary relocation is session-only — implemented via backendOpener
+        // at the runtime layer, never touching persistedFilename.
+        XCTAssertNil(video.persistedFilename)
+        XCTAssertEqual(video.filename, "/linux/train/video.mp4")
+    }
+
+    func testVideoClearPermanentRelocation() {
+        let video = Video(filename: "/original.mp4")
+        video.persistedFilename = "/relocated.mp4"
+        XCTAssertEqual(video.filename, "/relocated.mp4")
+
+        video.persistedFilename = nil
+        XCTAssertEqual(video.filename, "/original.mp4")
+    }
 }

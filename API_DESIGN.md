@@ -349,7 +349,15 @@ public final class PredictedInstance: Instance {
 
 /// A video source providing frame images.
 public final class Video: Hashable, @unchecked Sendable {
-    /// Path or URL to the video file (or image directory).
+    /// Original imported or decoded path from the source dataset.
+    public let originalFilename: String
+
+    /// Optional persisted override that should be written back on save.
+    /// Used for permanent relocation without discarding provenance.
+    public var persistedFilename: String? { get set }
+
+    /// Effective active path used for open/save/export behavior.
+    /// Resolves to `persistedFilename ?? originalFilename`.
     public var filename: String { get }
 
     /// Number of frames, or nil if unknown until opened.
@@ -365,6 +373,12 @@ public final class Video: Hashable, @unchecked Sendable {
     public var backendType: String { get }
 
     public init(filename: String)
+
+    /// Temporary relocation is session-only opener/runtime state and must not
+    /// mutate `persistedFilename`.
+    ///
+    /// Permanent relocation sets `persistedFilename` and preserves
+    /// `originalFilename`.
 
     // --- Frame access (async) ---
     /// Load a single frame as a platform image.

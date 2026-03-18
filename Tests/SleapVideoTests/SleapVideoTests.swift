@@ -478,6 +478,40 @@ final class VideoExtensionTests: XCTestCase {
         video.close()
     }
 
+    func testEffectivePathUsedByOpen() async throws {
+        let dir = try createImageSequenceDirectory(count: 3)
+        defer { cleanupDirectory(dir) }
+
+        // Video with original path pointing nowhere, but persistedFilename
+        // points to a valid image sequence directory.
+        let video = Video(filename: "/nonexistent/original", backendType: "imageSequence")
+        video.persistedFilename = dir.path
+
+        try await video.open()
+        XCTAssertEqual(video.frameCount, 3)
+        XCTAssertEqual(video.filename, dir.path)
+        XCTAssertEqual(video.originalFilename, "/nonexistent/original")
+        video.close()
+    }
+
+    func testBackendOpenerOverridesPersisted() async throws {
+        let dir = try createImageSequenceDirectory(count: 5)
+        defer { cleanupDirectory(dir) }
+
+        let video = Video(filename: "/original", backendType: "imageSequence")
+        // Temporary relocation via backendOpener — does NOT set persistedFilename
+        video.backendOpener = {
+            try ImageSequenceBackend(directory: dir)
+        }
+
+        try await video.open()
+        XCTAssertEqual(video.frameCount, 5)
+        // persistedFilename should remain nil (session-only)
+        XCTAssertNil(video.persistedFilename)
+        XCTAssertEqual(video.filename, "/original")
+        video.close()
+    }
+
     #if canImport(AVFoundation)
     func testOpenMediaBackend() async throws {
         let url = try await createTestVideo(frameCount: 5)

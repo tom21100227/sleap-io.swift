@@ -499,6 +499,147 @@ final class SLPWriterTests: XCTestCase {
         XCTAssertEqual(reloaded.count, labels.count, "Frame metadata should survive fallback save")
     }
 
+    // MARK: - Video relocation serialization
+
+    func testPermanentRelocationRoundTrip() async throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "/linux/train/video.mp4")
+        video.persistedFilename = "/ipad/Documents/video.mp4"
+
+        let frame = LabeledFrame(
+            video: video, frameIndex: 0,
+            instances: [Instance(skeleton: skeleton)]
+        )
+        let labels = Labels(
+            frameStore: EagerFrameStore(frames: [frame]),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: []
+        )
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)
+
+        let reloaded = try await Labels.loadEager(from: outputURL)
+        let v = reloaded.videos[0]
+        XCTAssertEqual(v.originalFilename, "/linux/train/video.mp4")
+        XCTAssertEqual(v.persistedFilename, "/ipad/Documents/video.mp4")
+        XCTAssertEqual(v.filename, "/ipad/Documents/video.mp4")
+    }
+
+    func testNoRelocationOmitsOriginalFilename() async throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "/data/video.mp4")
+
+        let frame = LabeledFrame(
+            video: video, frameIndex: 0,
+            instances: [Instance(skeleton: skeleton)]
+        )
+        let labels = Labels(
+            frameStore: EagerFrameStore(frames: [frame]),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: []
+        )
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)
+
+        let reloaded = try await Labels.loadEager(from: outputURL)
+        let v = reloaded.videos[0]
+        XCTAssertEqual(v.originalFilename, "/data/video.mp4")
+        XCTAssertNil(v.persistedFilename)
+        XCTAssertEqual(v.filename, "/data/video.mp4")
+    }
+
+    func testTemporaryRelocationNotSerialized() async throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "/linux/train/video.mp4")
+        // Temporary relocation: no persistedFilename, just a runtime backendOpener
+        // (simulated here by not setting persistedFilename)
+
+        let frame = LabeledFrame(
+            video: video, frameIndex: 0,
+            instances: [Instance(skeleton: skeleton)]
+        )
+        let labels = Labels(
+            frameStore: EagerFrameStore(frames: [frame]),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: []
+        )
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)
+
+        // Reload: should still have original path, no relocation
+        let reloaded = try await Labels.loadEager(from: outputURL)
+        let v = reloaded.videos[0]
+        XCTAssertEqual(v.originalFilename, "/linux/train/video.mp4")
+        XCTAssertNil(v.persistedFilename)
+        XCTAssertEqual(v.filename, "/linux/train/video.mp4")
+    }
+
+    func testLegacySLPRoundTripPreservesFilename() async throws {
+        // Simulate a fixture with no relocation — should round-trip cleanly
+        let url = try requireFixture("sparse_v1_5.slp")
+        let labels = try await Labels.load(from: url)
+        labels.materialize()
+
+        // Legacy files should have no persisted relocation
+        for video in labels.videos {
+            XCTAssertNil(video.persistedFilename,
+                         "Legacy SLP should decode with persistedFilename = nil")
+        }
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)
+
+        let reloaded = try await Labels.loadEager(from: outputURL)
+        for (i, video) in reloaded.videos.enumerated() {
+            XCTAssertEqual(video.filename, labels.videos[i].filename)
+            XCTAssertNil(video.persistedFilename)
+        }
+    }
+
+    func testClearingPermanentRelocationRemovesSerializedProvenance() async throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
+        let video = Video(filename: "/linux/train/video.mp4")
+        video.persistedFilename = "/ipad/Documents/video.mp4"
+
+        let frame = LabeledFrame(
+            video: video, frameIndex: 0,
+            instances: [Instance(skeleton: skeleton)]
+        )
+        let labels = Labels(
+            frameStore: EagerFrameStore(frames: [frame]),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: []
+        )
+
+        let firstURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: firstURL) }
+        try await labels.save(to: firstURL)
+
+        let reloaded = try await Labels.loadEager(from: firstURL)
+        reloaded.videos[0].persistedFilename = nil
+
+        let secondURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: secondURL) }
+        try await reloaded.save(to: secondURL)
+
+        let cleared = try await Labels.loadEager(from: secondURL)
+        let clearedVideo = cleared.videos[0]
+        XCTAssertEqual(clearedVideo.originalFilename, "/linux/train/video.mp4")
+        XCTAssertNil(clearedVideo.persistedFilename)
+        XCTAssertEqual(clearedVideo.filename, "/linux/train/video.mp4")
+    }
+
     func testWriterRoundTripSupportsROIsAndMasks() async throws {
         let labels = makeWriterRegressionLabels()
         var roi = ROI(

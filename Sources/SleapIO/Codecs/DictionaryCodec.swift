@@ -255,15 +255,24 @@ public struct DictionaryCodec {
     // MARK: - Video encode/decode
 
     public static func encodeVideo(_ video: Video) -> [String: Any] {
-        [
+        var dict: [String: Any] = [
             "filename": video.filename,
             "backend_type": video.backendType
         ]
+        if video.persistedFilename != nil {
+            dict["original_filename"] = video.originalFilename
+        }
+        return dict
     }
 
     public static func decodeVideo(_ dict: [String: Any]) -> Video {
         let filename = dict["filename"] as? String ?? ""
         let backendType = dict["backend_type"] as? String ?? "media"
+        if let originalFilename = dict["original_filename"] as? String {
+            let video = Video(filename: originalFilename, backendType: backendType)
+            video.persistedFilename = filename
+            return video
+        }
         return Video(filename: filename, backendType: backendType)
     }
 

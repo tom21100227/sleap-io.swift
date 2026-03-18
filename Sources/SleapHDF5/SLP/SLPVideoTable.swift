@@ -31,16 +31,24 @@ enum SLPVideoTable {
 
     static func decodeVideo(from dict: [String: Any]) -> Video {
         let backend = dict["backend"] as? [String: Any] ?? [:]
-        let filename = backend["filename"] as? String ?? dict["filename"] as? String ?? ""
+        let effectiveFilename = backend["filename"] as? String ?? dict["filename"] as? String ?? ""
 
         var backendType = "media"
         if let type = backend["type"] as? String {
             backendType = type
-        } else if filename == "." {
+        } else if effectiveFilename == "." {
             backendType = "hdf5"
         }
 
-        let video = Video(filename: filename, backendType: backendType, backendMetadata: backend)
+        let video: Video
+        if let originalFilename = backend["original_filename"] as? String {
+            // Relocated SLP: original_filename is provenance, filename is the persisted relocation
+            video = Video(filename: originalFilename, backendType: backendType, backendMetadata: backend)
+            video.persistedFilename = effectiveFilename
+        } else {
+            // Legacy SLP: filename is the original, no relocation
+            video = Video(filename: effectiveFilename, backendType: backendType, backendMetadata: backend)
+        }
 
         // Extract frame count and size from backend shape if available.
         // Python sleap-io stores shape as [num_frames, height, width, channels].

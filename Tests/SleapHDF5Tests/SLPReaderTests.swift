@@ -523,6 +523,39 @@ final class SLPReaderTests: XCTestCase {
         XCTAssertNil(video.frameSize)
     }
 
+    // MARK: - Video relocation decode
+
+    func testDecodeVideo_legacySLP_noRelocation() {
+        let dict: [String: Any] = [
+            "backend": [
+                "filename": "/data/video.mp4",
+                "type": "media",
+            ] as [String: Any]
+        ]
+
+        let video = SLPVideoTable.decodeVideo(from: dict)
+
+        XCTAssertEqual(video.originalFilename, "/data/video.mp4")
+        XCTAssertNil(video.persistedFilename)
+        XCTAssertEqual(video.filename, "/data/video.mp4")
+    }
+
+    func testDecodeVideo_relocatedSLP_restoresProvenance() {
+        let dict: [String: Any] = [
+            "backend": [
+                "filename": "/ipad/Documents/video.mp4",
+                "type": "media",
+                "original_filename": "/linux/train/video.mp4",
+            ] as [String: Any]
+        ]
+
+        let video = SLPVideoTable.decodeVideo(from: dict)
+
+        XCTAssertEqual(video.originalFilename, "/linux/train/video.mp4")
+        XCTAssertEqual(video.persistedFilename, "/ipad/Documents/video.mp4")
+        XCTAssertEqual(video.filename, "/ipad/Documents/video.mp4")
+    }
+
     func testDecodeVideo_roundTrip_shapeWrittenAndPreserved() async throws {
         let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head")])
         let video = Video(filename: "shape_test.mp4")

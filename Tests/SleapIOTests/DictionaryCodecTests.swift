@@ -233,4 +233,72 @@ final class DictionaryCodecTests: XCTestCase {
         XCTAssertEqual(decodedInst.points[1].x, 150, accuracy: 1e-4)
         XCTAssertEqual(decodedInst.points[1].y, 250, accuracy: 1e-4)
     }
+
+    // MARK: - Video relocation provenance
+
+    func testVideoLegacyDecodeNoRelocation() throws {
+        let dict: [String: Any] = [
+            "filename": "/data/video.mp4",
+            "backend_type": "media"
+        ]
+        let video = DictionaryCodec.decodeVideo(dict)
+
+        XCTAssertEqual(video.originalFilename, "/data/video.mp4")
+        XCTAssertNil(video.persistedFilename)
+        XCTAssertEqual(video.filename, "/data/video.mp4")
+    }
+
+    func testVideoRelocatedDecodeRestoresProvenance() throws {
+        let dict: [String: Any] = [
+            "filename": "/ipad/relocated.mp4",
+            "backend_type": "media",
+            "original_filename": "/linux/train/video.mp4"
+        ]
+        let video = DictionaryCodec.decodeVideo(dict)
+
+        XCTAssertEqual(video.originalFilename, "/linux/train/video.mp4")
+        XCTAssertEqual(video.persistedFilename, "/ipad/relocated.mp4")
+        XCTAssertEqual(video.filename, "/ipad/relocated.mp4")
+    }
+
+    func testVideoEncodeNoRelocationOmitsOriginalFilename() {
+        let video = Video(filename: "/data/video.mp4")
+        let dict = DictionaryCodec.encodeVideo(video)
+
+        XCTAssertEqual(dict["filename"] as? String, "/data/video.mp4")
+        XCTAssertNil(dict["original_filename"])
+    }
+
+    func testVideoEncodePermanentRelocationIncludesOriginalFilename() {
+        let video = Video(filename: "/linux/train/video.mp4")
+        video.persistedFilename = "/ipad/relocated.mp4"
+        let dict = DictionaryCodec.encodeVideo(video)
+
+        XCTAssertEqual(dict["filename"] as? String, "/ipad/relocated.mp4")
+        XCTAssertEqual(dict["original_filename"] as? String, "/linux/train/video.mp4")
+    }
+
+    func testVideoPermanentRelocationRoundTrip() throws {
+        let skeleton = Skeleton(name: "s", nodes: [Node(name: "n")])
+        let video = Video(filename: "/original/path.mp4")
+        video.persistedFilename = "/relocated/path.mp4"
+        let frame = LabeledFrame(video: video, frameIndex: 0, instances: [
+            Instance(skeleton: skeleton),
+        ])
+
+        let labels = Labels(
+            frameStore: EagerFrameStore(frames: [frame]),
+            videos: [video],
+            skeletons: [skeleton],
+            tracks: []
+        )
+
+        let dict = DictionaryCodec.encode(labels)
+        let decoded = try DictionaryCodec.decode(dict)
+
+        let v = decoded.videos[0]
+        XCTAssertEqual(v.originalFilename, "/original/path.mp4")
+        XCTAssertEqual(v.persistedFilename, "/relocated/path.mp4")
+        XCTAssertEqual(v.filename, "/relocated/path.mp4")
+    }
 }

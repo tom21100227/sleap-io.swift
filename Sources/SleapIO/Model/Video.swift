@@ -3,8 +3,18 @@ import CoreGraphics
 
 /// A video source providing frame images.
 public final class Video: Hashable, @unchecked Sendable {
-    /// Path or URL to the video file (or image directory).
-    public let filename: String
+    /// Original imported or decoded source path.
+    public let originalFilename: String
+
+    /// Optional persisted override path that is written back on save.
+    /// Used for permanent relocation without discarding provenance.
+    public var persistedFilename: String?
+
+    /// Effective active path used for open/save/export behavior.
+    /// Resolves to `persistedFilename ?? originalFilename`.
+    public var filename: String {
+        persistedFilename ?? originalFilename
+    }
 
     /// Number of frames, or nil if unknown until opened.
     public var frameCount: Int?
@@ -24,7 +34,7 @@ public final class Video: Hashable, @unchecked Sendable {
     public init(filename: String,
                 backendType: String = "media",
                 backendMetadata: [String: Any] = [:]) {
-        self.filename = filename
+        self.originalFilename = filename
         self.backendType = backendType
         self.backendMetadata = backendMetadata
     }
