@@ -116,7 +116,7 @@ final class RenderOptionsTests: XCTestCase {
         let opts = RenderOptions.defaults
         XCTAssertEqual(opts.nodeRadius, 4.0)
         XCTAssertEqual(opts.edgeWidth, 2.0)
-        XCTAssertEqual(opts.palette, "alphabet")
+        XCTAssertEqual(opts.palette, "standard")
         XCTAssertFalse(opts.showLabels)
         XCTAssertFalse(opts.showTrackNames)
         XCTAssertFalse(opts.showBoundingBoxes)
@@ -151,9 +151,9 @@ final class ColorPaletteTests: XCTestCase {
         XCTAssertEqual(c0.components?.count, c26.components?.count)
     }
 
-    func testUnknownPaletteFallsBackToAlphabet() {
+    func testUnknownPaletteFallsBackToStandard() {
         let pal = ColorPalette.palette(named: "nonexistent")
-        XCTAssertEqual(pal.count, 26)
+        XCTAssertEqual(pal.count, 7)
     }
 
     func testAlphabetFirstColorMatchesSLEAP() {

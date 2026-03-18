@@ -345,6 +345,11 @@ public final class Labels: @unchecked Sendable {
 
     // MARK: - Convenience
 
+    /// Whether any video in this dataset uses an embedded HDF5 backend.
+    public var hasEmbeddedVideo: Bool {
+        _videos.contains { $0.backendType.lowercased().hasPrefix("hdf5") }
+    }
+
     /// The primary skeleton (first in the list), if any.
     public var skeleton: Skeleton? { _skeletons.first }
 

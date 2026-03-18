@@ -15,6 +15,11 @@ public final class SleapHDF5EmbeddedVideoBackend: VideoBackend, @unchecked Senda
     let channelOrder: String
     let sourceVideoJSON: String
 
+    /// The HDF5 file this embedded video was loaded from (for H5Ocopy during save).
+    let sourceFilePath: String?
+    /// The video group index in the source file (e.g., 0 for /video0).
+    let sourceVideoIndex: Int?
+
     private let storage: Storage
     private let cacheLock = NSLock()
     private var decodedFrames: [Int: CGImage] = [:]
@@ -34,6 +39,8 @@ public final class SleapHDF5EmbeddedVideoBackend: VideoBackend, @unchecked Senda
         self.format = embedded.format
         self.channelOrder = embedded.channelOrder
         self.sourceVideoJSON = embedded.sourceVideoJSON
+        self.sourceFilePath = path
+        self.sourceVideoIndex = videoIndex
         self._frameCount = embedded.frames.keys.max().map { $0 + 1 } ?? 0
 
         if embedded.format == "hdf5", let size = embedded.frameSize {

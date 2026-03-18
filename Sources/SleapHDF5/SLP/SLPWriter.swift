@@ -7,11 +7,40 @@ import SleapVideo
 public struct SLPWriter {
 
     /// Write a Labels object to an SLP file.
+    ///
+    /// When the destination path matches a source file used by embedded videos,
+    /// writes to a temporary file first, then atomically replaces the original.
     public static func write(_ labels: Labels, to path: String) async throws {
-        let actor = try HDF5FileActor.create(path: path)
-        try await actor.withFile { file in
-            try writeToFile(labels, file: file)
+        // Check if any embedded video's source is the same as the destination.
+        let needsAtomicReplace = labels.videos.contains { video in
+            guard let backend = video.backend as? SleapHDF5EmbeddedVideoBackend,
+                  let sourcePath = backend.sourceFilePath else { return false }
+            return resolvePath(sourcePath) == resolvePath(path)
         }
+
+        if needsAtomicReplace {
+            // Write to a temp file, then atomically replace the destination.
+            let tempPath = path + ".sleap-tmp-\(UUID().uuidString)"
+            let actor = try HDF5FileActor.create(path: tempPath)
+            try await actor.withFile { file in
+                try writeToFile(labels, file: file)
+            }
+            // Close source HDF5 handles by letting the actor deinit,
+            // then atomically replace.
+            let fm = FileManager.default
+            _ = try fm.replaceItemAt(URL(fileURLWithPath: path),
+                                     withItemAt: URL(fileURLWithPath: tempPath))
+        } else {
+            let actor = try HDF5FileActor.create(path: path)
+            try await actor.withFile { file in
+                try writeToFile(labels, file: file)
+            }
+        }
+    }
+
+    /// Resolve a path to a canonical absolute path for comparison.
+    private static func resolvePath(_ path: String) -> String {
+        (path as NSString).standardizingPath
     }
 
     /// Write to an open HDF5File (internal).
@@ -128,6 +157,18 @@ public struct SLPWriter {
             guard video.backendType == "hdf5" else { continue }
             guard let backend = video.backend as? SleapHDF5EmbeddedVideoBackend else { continue }
 
+            // Try H5Ocopy from the source file (preserves all frame data without loading into memory).
+            if let sourcePath = backend.sourceFilePath,
+               let sourceIndex = backend.sourceVideoIndex,
+               FileManager.default.fileExists(atPath: sourcePath) {
+                let sourceFile = try HDF5File.openReadOnly(path: sourcePath)
+                let sourceGroupName = "video\(sourceIndex)"
+                let destGroupName = "video\(index)"
+                try file.copyObject(from: sourceFile, sourceName: sourceGroupName, destName: destGroupName)
+                continue
+            }
+
+            // Fallback: write from in-memory cache (degraded mode).
             let frameData = backend.embeddedFrames.keys.sorted().compactMap { frameIndex in
                 backend.embeddedFrames[frameIndex].map { (sourceFrameIdx: frameIndex, data: $0) }
             }

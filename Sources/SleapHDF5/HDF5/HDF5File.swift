@@ -53,6 +53,16 @@ final class HDF5File {
         return HDF5File(id: fid, path: path)
     }
 
+    // MARK: - Object copy
+
+    /// Copy an object (group/dataset) from another open HDF5 file into this file.
+    func copyObject(from sourceFile: HDF5File, sourceName: String, destName: String) throws {
+        try hdf5Check("H5Ocopy \(sourceName) -> \(destName)") {
+            H5Ocopy(sourceFile.id, sourceName, self.id, destName,
+                     shim_H5P_DEFAULT(), shim_H5P_DEFAULT())
+        }
+    }
+
     // MARK: - Root-level operations
 
     /// Open a top-level group.

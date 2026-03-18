@@ -1,11 +1,26 @@
 import CoreGraphics
 
 /// Built-in color palettes for pose rendering.
+///
+/// Palettes match the Python sleap-io rendering module for consistency.
 public enum ColorPalette {
+
+    // MARK: - Standard palette (MATLAB default, 7 colors)
+
+    /// The "standard" palette: MATLAB default colors. Default in Python SLEAP.
+    public static let standard: [CGColor] = [
+        cgColor(0x00, 0x72, 0xBD),  // Blue
+        cgColor(0xD9, 0x53, 0x19),  // Orange
+        cgColor(0xED, 0xB1, 0x20),  // Yellow/Gold
+        cgColor(0x7E, 0x2F, 0x8E),  // Purple
+        cgColor(0x77, 0xAC, 0x30),  // Green
+        cgColor(0x4D, 0xBE, 0xEE),  // Light blue
+        cgColor(0xA2, 0x14, 0x2F),  // Dark red
+    ]
 
     // MARK: - Alphabet palette (26 colors)
 
-    /// The "alphabet" palette: 26 visually distinct colors matching Python SLEAP.
+    /// The "alphabet" palette: 26 visually distinct colors.
     public static let alphabet: [CGColor] = [
         cgColor(0xF0, 0xA3, 0xFF),
         cgColor(0x00, 0x75, 0xDC),
@@ -35,10 +50,10 @@ public enum ColorPalette {
         cgColor(0xFF, 0x50, 0x05),
     ]
 
-    // MARK: - Catscale palette (10 colors)
+    // MARK: - Tableau 10 palette
 
-    /// The "catscale" palette: 10 categorical colors.
-    public static let catscale: [CGColor] = [
+    /// The "tableau10" palette: Tableau's categorical colors.
+    public static let tableau10: [CGColor] = [
         cgColor(0x1F, 0x77, 0xB4),
         cgColor(0xFF, 0x7F, 0x0E),
         cgColor(0x2C, 0xA0, 0x2C),
@@ -51,19 +66,76 @@ public enum ColorPalette {
         cgColor(0x17, 0xBE, 0xCF),
     ]
 
+    // MARK: - Distinct palette (10 high-contrast colors)
+
+    public static let distinct: [CGColor] = [
+        cgColor(0xFF, 0x64, 0x64),
+        cgColor(0x64, 0x64, 0xFF),
+        cgColor(0x64, 0xFF, 0x64),
+        cgColor(0xFF, 0xFF, 0x64),
+        cgColor(0xFF, 0x64, 0xFF),
+        cgColor(0x64, 0xFF, 0xFF),
+        cgColor(0xFF, 0xB4, 0x64),
+        cgColor(0xB4, 0x64, 0xFF),
+        cgColor(0xFF, 0x96, 0x96),
+        cgColor(0x96, 0xFF, 0xC8),
+    ]
+
+    // MARK: - Rainbow palette (12 colors)
+
+    public static let rainbow: [CGColor] = [
+        cgColor(0xFF, 0x00, 0x00),
+        cgColor(0xFF, 0x7F, 0x00),
+        cgColor(0xFF, 0xFF, 0x00),
+        cgColor(0x7F, 0xFF, 0x00),
+        cgColor(0x00, 0xFF, 0x00),
+        cgColor(0x00, 0xFF, 0x7F),
+        cgColor(0x00, 0xFF, 0xFF),
+        cgColor(0x00, 0x7F, 0xFF),
+        cgColor(0x00, 0x00, 0xFF),
+        cgColor(0x7F, 0x00, 0xFF),
+        cgColor(0xFF, 0x00, 0xFF),
+        cgColor(0xFF, 0x00, 0x7F),
+    ]
+
+    // MARK: - Seaborn palette (10 colors)
+
+    public static let seaborn: [CGColor] = [
+        cgColor(0x4C, 0x72, 0xB0),
+        cgColor(0xDD, 0x84, 0x52),
+        cgColor(0x55, 0xA8, 0x68),
+        cgColor(0xC4, 0x4E, 0x52),
+        cgColor(0x81, 0x72, 0xB3),
+        cgColor(0x93, 0x78, 0x60),
+        cgColor(0xDA, 0x8B, 0xC3),
+        cgColor(0x8C, 0x8C, 0x8C),
+        cgColor(0xCC, 0xB9, 0x74),
+        cgColor(0x64, 0xB5, 0xCD),
+    ]
+
     // MARK: - Lookup
 
-    /// Returns the palette array for a given name. Falls back to `alphabet` for unknown names.
+    /// All available palette names, in display order.
+    public static let allNames: [String] = [
+        "standard", "alphabet", "tableau10", "distinct",
+        "rainbow", "seaborn",
+    ]
+
+    /// Returns the palette array for a given name. Falls back to `standard` for unknown names.
     public static func palette(named name: String) -> [CGColor] {
         switch name {
+        case "standard": return standard
         case "alphabet": return alphabet
-        case "catscale": return catscale
-        default: return alphabet
+        case "tableau10", "catscale": return tableau10
+        case "distinct": return distinct
+        case "rainbow": return rainbow
+        case "seaborn": return seaborn
+        default: return standard
         }
     }
 
     /// Returns a color from the named palette, wrapping around for indices beyond the palette length.
-    public static func color(at index: Int, palette name: String = "alphabet") -> CGColor {
+    public static func color(at index: Int, palette name: String = "standard") -> CGColor {
         let pal = palette(named: name)
         return pal[index % pal.count]
     }

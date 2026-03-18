@@ -386,6 +386,119 @@ final class SLPWriterTests: XCTestCase {
         XCTAssertEqual(reloaded[1].instances[1].points[1].y, 120, accuracy: 1e-3)
     }
 
+    // MARK: - Embedded video preservation
+
+    func testEmbeddedVideoRoundTrip() async throws {
+        let url = try requireFixture("packaged_frames_v1_5.pkg.slp")
+        let labels = try await Labels.load(from: url)
+        labels.materialize()
+
+        // Verify source has embedded video
+        XCTAssertTrue(labels.hasEmbeddedVideo)
+        guard let backend = labels.videos[0].backend as? SleapHDF5EmbeddedVideoBackend else {
+            XCTFail("Expected SleapHDF5EmbeddedVideoBackend")
+            return
+        }
+        let originalFrameCount = backend.embeddedFrames.count
+        XCTAssertGreaterThan(originalFrameCount, 0, "Source should have embedded frames")
+
+        // Save to new location
+        let outputURL = tempURL(extension: "pkg.slp")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)
+
+        // Reload and verify frame data preserved
+        let reloaded = try await Labels.load(from: outputURL)
+        reloaded.materialize()
+        XCTAssertTrue(reloaded.hasEmbeddedVideo)
+
+        guard let reloadedBackend = reloaded.videos[0].backend as? SleapHDF5EmbeddedVideoBackend else {
+            XCTFail("Expected SleapHDF5EmbeddedVideoBackend after reload")
+            return
+        }
+        XCTAssertEqual(reloadedBackend.embeddedFrames.count, originalFrameCount,
+                       "All embedded frames should be preserved after round-trip")
+
+        // Verify actual frame data is decodable
+        let firstFrameIndex = reloadedBackend.embeddedFrames.keys.sorted().first!
+        let image = try await reloaded.videos[0].frame(at: firstFrameIndex)
+        XCTAssertGreaterThan(image.width, 0)
+        XCTAssertGreaterThan(image.height, 0)
+    }
+
+    func testEmbeddedVideoSaveToSamePath() async throws {
+        let url = try requireFixture("packaged_frames_v1_5.pkg.slp")
+
+        // Copy fixture to temp location
+        let tempCopy = tempURL(extension: "pkg.slp")
+        defer { try? FileManager.default.removeItem(at: tempCopy) }
+        try FileManager.default.copyItem(at: url, to: tempCopy)
+
+        // Load from temp copy
+        let labels = try await Labels.load(from: tempCopy)
+        labels.materialize()
+        let originalFrameCount = (labels.videos[0].backend as! SleapHDF5EmbeddedVideoBackend).embeddedFrames.count
+
+        // Save back to the same path (atomic replace)
+        try await labels.save(to: tempCopy)
+
+        // Reload and verify
+        let reloaded = try await Labels.load(from: tempCopy)
+        reloaded.materialize()
+        XCTAssertTrue(reloaded.hasEmbeddedVideo)
+
+        let reloadedBackend = reloaded.videos[0].backend as! SleapHDF5EmbeddedVideoBackend
+        XCTAssertEqual(reloadedBackend.embeddedFrames.count, originalFrameCount,
+                       "Save-to-same-path should preserve all embedded frames")
+    }
+
+    func testEmbeddedVideoLazySave() async throws {
+        let url = try requireFixture("packaged_frames_v1_5.pkg.slp")
+        let labels = try await Labels.load(from: url)
+        XCTAssertTrue(labels.isLazy)
+
+        // Save without materializing — H5Ocopy should still work
+        let outputURL = tempURL(extension: "pkg.slp")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)
+
+        // Reload and verify video groups preserved
+        let reloaded = try await Labels.load(from: outputURL)
+        reloaded.materialize()
+        XCTAssertTrue(reloaded.hasEmbeddedVideo)
+
+        guard let reloadedBackend = reloaded.videos[0].backend as? SleapHDF5EmbeddedVideoBackend else {
+            XCTFail("Expected embedded video backend after lazy save")
+            return
+        }
+        XCTAssertGreaterThan(reloadedBackend.embeddedFrames.count, 0,
+                             "Lazy save with H5Ocopy should preserve all video groups")
+    }
+
+    func testEmbeddedVideoSourceDeletedFallback() async throws {
+        let url = try requireFixture("packaged_frames_v1_5.pkg.slp")
+
+        // Copy fixture then load from it
+        let tempCopy = tempURL(extension: "pkg.slp")
+        try FileManager.default.copyItem(at: url, to: tempCopy)
+
+        let labels = try await Labels.load(from: tempCopy)
+        labels.materialize()
+
+        // Delete the source file to force fallback path
+        try FileManager.default.removeItem(at: tempCopy)
+
+        // Save should still work using in-memory fallback
+        let outputURL = tempURL(extension: "pkg.slp")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)
+
+        // Reload — should have whatever was in the in-memory cache
+        let reloaded = try await Labels.load(from: outputURL)
+        reloaded.materialize()
+        XCTAssertEqual(reloaded.count, labels.count, "Frame metadata should survive fallback save")
+    }
+
     func testWriterRoundTripSupportsROIsAndMasks() async throws {
         let labels = makeWriterRegressionLabels()
         var roi = ROI(
