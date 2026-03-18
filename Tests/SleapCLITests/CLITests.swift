@@ -4,21 +4,21 @@ final class CLITests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Path to the built sleapio binary.
+    /// Path to the built sleap-io binary.
     private func binaryPath() throws -> String {
         // When running via `swift test`, the build products are in .build/debug/
         var dir = URL(fileURLWithPath: #file)
         while dir.path != "/" {
             dir = dir.deletingLastPathComponent()
             if FileManager.default.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) {
-                let binary = dir.appendingPathComponent(".build/debug/sleapio").path
+                let binary = dir.appendingPathComponent(".build/debug/sleap-io").path
                 if FileManager.default.fileExists(atPath: binary) {
                     return binary
                 }
                 break
             }
         }
-        throw XCTSkip("sleapio binary not found — run `swift build` first")
+        throw XCTSkip("sleap-io binary not found — run `swift build` first")
     }
 
     private func fixturePath(_ relativePath: String) -> String {

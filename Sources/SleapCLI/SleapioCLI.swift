@@ -6,14 +6,14 @@ import SleapHDF5
 @main
 struct SleapioCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "sleapio",
+        commandName: "sleap-io",
         abstract: "SLEAP pose data inspection and conversion tool",
         subcommands: [InfoCommand.self, ShowCommand.self, ConvertCommand.self]
     )
 
     /// When invoked without a subcommand, print usage info and exit with error.
     mutating func run() async throws {
-        throw ValidationError("A subcommand is required. See 'sleapio --help' for usage.")
+        throw ValidationError("A subcommand is required. See 'sleap-io --help' for usage.")
     }
 }
 

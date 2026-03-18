@@ -32,7 +32,9 @@ let package = Package(
         .library(name: "SleapHDF5", targets: ["SleapHDF5"]),
         .library(name: "SleapVideo", targets: ["SleapVideo"]),
         .library(name: "SleapRendering", targets: ["SleapRendering"]),
-        .executable(name: "sleapio", targets: ["SleapCLI"]),
+        // Avoid a case-folding collision in Xcode on default macOS filesystems:
+        // the old executable product name `sleapio` conflicts with `SleapIO`.
+        .executable(name: "sleap-io", targets: ["SleapCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
