@@ -11,6 +11,13 @@ final class StressTests: XCTestCase {
 
     // MARK: - Fixture helpers
 
+    private var packageRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SleapHDF5Tests/
+            .deletingLastPathComponent()  // Tests/
+            .deletingLastPathComponent()  // package root
+    }
+
     private func emitBenchmark(
         fixture: String,
         metric: String,
@@ -35,10 +42,6 @@ final class StressTests: XCTestCase {
     }
 
     private func stressFixtureURL(_ name: String) throws -> URL {
-        let packageRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SleapHDF5Tests/
-            .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // package root
         let url = packageRoot.appendingPathComponent("Tests/Fixtures/stress/\(name)")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("Stress fixture '\(name)' not found")
@@ -49,6 +52,39 @@ final class StressTests: XCTestCase {
     private func tempURL(extension ext: String = "slp") -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("sleap_stress_\(UUID().uuidString).\(ext)")
+    }
+
+    private func cliBinaryURL() throws -> URL {
+        let url = packageRoot.appendingPathComponent(".build/debug/sleap-io")
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            throw XCTSkip("sleap-io binary not found at \(url.path). Run `swift build` first.")
+        }
+        return url
+    }
+
+    private func runCLI(_ args: [String]) throws -> (terminationReason: Process.TerminationReason, status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = try cliBinaryURL()
+        process.arguments = args
+        process.currentDirectoryURL = packageRoot
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+        return (
+            terminationReason: process.terminationReason,
+            status: process.terminationStatus,
+            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+            stderr: String(data: stderrData, encoding: .utf8) ?? ""
+        )
     }
 
     // MARK: - single_predictions.slp (2.2 MB, 5k frames, 1 pred/frame)
@@ -276,6 +312,60 @@ final class StressTests: XCTestCase {
             seconds: elapsed,
             extra: ["frame": frame.frameIndex]
         )
+    }
+
+    func testTrainingEmbedded_cliRoundTripSave() async throws {
+        let inputURL = try stressFixtureURL("training_embedded.pkg.slp")
+        let outputURL = tempURL(extension: "pkg.slp")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        let start = CFAbsoluteTimeGetCurrent()
+        let result = try runCLI(["convert", inputURL.path, outputURL.path])
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+
+        XCTAssertEqual(
+            result.terminationReason, .exit,
+            "sleap-io terminated abnormally.\nstdout:\n\(result.stdout)\nstderr:\n\(result.stderr)"
+        )
+        XCTAssertEqual(
+            result.status, 0,
+            "sleap-io convert failed.\nstdout:\n\(result.stdout)\nstderr:\n\(result.stderr)"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
+
+        let reloaded = try await Labels.load(from: outputURL)
+        XCTAssertTrue(reloaded.hasEmbeddedVideo)
+        XCTAssertEqual(reloaded.frameCount, 540)
+        XCTAssertEqual(reloaded.videos.count, 183)
+
+        emitBenchmark(fixture: "training_embedded", metric: "cli_roundtrip_save", seconds: elapsed)
+    }
+
+    func testTrainingEmbedded_cliSaveToSamePath() async throws {
+        let inputURL = try stressFixtureURL("training_embedded.pkg.slp")
+        let workingCopyURL = tempURL(extension: "pkg.slp")
+        defer { try? FileManager.default.removeItem(at: workingCopyURL) }
+        try FileManager.default.copyItem(at: inputURL, to: workingCopyURL)
+
+        let start = CFAbsoluteTimeGetCurrent()
+        let result = try runCLI(["convert", workingCopyURL.path, workingCopyURL.path, "--force"])
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+
+        XCTAssertEqual(
+            result.terminationReason, .exit,
+            "sleap-io terminated abnormally during same-path save.\nstdout:\n\(result.stdout)\nstderr:\n\(result.stderr)"
+        )
+        XCTAssertEqual(
+            result.status, 0,
+            "sleap-io same-path convert failed.\nstdout:\n\(result.stdout)\nstderr:\n\(result.stderr)"
+        )
+
+        let reloaded = try await Labels.load(from: workingCopyURL)
+        XCTAssertTrue(reloaded.hasEmbeddedVideo)
+        XCTAssertEqual(reloaded.frameCount, 540)
+        XCTAssertEqual(reloaded.videos.count, 183)
+
+        emitBenchmark(fixture: "training_embedded", metric: "cli_same_path_save", seconds: elapsed)
     }
 
     // MARK: - large-prediction-tracked.slp (234 MB, 180k frames, 534k predicted instances, 3 tracks)
