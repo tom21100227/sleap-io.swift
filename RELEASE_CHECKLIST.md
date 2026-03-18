@@ -20,7 +20,7 @@ The release notes must explicitly state:
 2. supported formats
 3. unsupported formats
 4. known limitations that are accepted at release time
-5. whether HDF5-backed I/O is macOS-only or truly deployable on iPadOS
+5. whether HDF5-backed I/O is officially supported in downstream iPad apps for this release
 
 ## Hard Gates
 
@@ -36,6 +36,7 @@ These are required before tagging a release.
 
 - [ ] `swift build` succeeds on a clean checkout
 - [ ] `swift test` passes on a clean checkout
+- [ ] release-candidate package bits link successfully into the downstream iPad validation target
 - [ ] no passing test emits low-level HDF5 diagnostics or similar error spam
 - [ ] no test is skipped for a known product bug that is still in scope for the release
 
@@ -52,6 +53,7 @@ These are required before tagging a release.
 - [ ] at least one large multi-instance predictions `.slp` has been load-tested
 - [ ] at least one packaged or embedded-frame `.pkg.slp` has been load-tested
 - [ ] at least one single-instance predictions `.slp` has been load-tested
+- [ ] at least one real external-video `.slp` has passed downstream iPad open/edit/save/reopen validation
 - [ ] at least one CLI conversion has been exercised on real-world data
 - [ ] timings and noteworthy memory behavior have been recorded in release notes or an internal log
 
@@ -61,11 +63,14 @@ These are required before tagging a release.
 - [ ] no open P2 issues remain that would silently corrupt, merge, or drop pose data
 - [ ] packaged or embedded video paths work end to end on supported real-world files
 - [ ] public load/save dispatch behaves correctly for all supported formats
+- [x] temporary relocation leaves serialized file contents unchanged
+- [x] permanent relocation survives save/reopen without a second prompt
 
 ### 6. Documentation
 
 - [ ] `README.md` reflects the actual supported format matrix
-- [ ] platform support language is precise about current HDF5 deployment status on iPadOS
+- [ ] platform support language is precise about the official iPad support posture for this release
+- [ ] `RELEASE_V0_3_0_PLAN.md` is the authoritative release handoff and is linked from the root planning docs
 - [ ] `PHASE3_SPEC.md` and `PHASE4_SPEC.md` match shipped behavior
 - [ ] phase 5 formats are documented as not yet implemented
 - [ ] CLI usage is documented with at least one concrete example per command
@@ -97,6 +102,8 @@ explicit decision to defer them.
 This is a snapshot of what should be checked before the next public release.
 Update or delete this section once the items below are resolved.
 
+- [ ] complete downstream iPad `.slp` validation with release-candidate bits
+- [x] land the `Video.originalFilename` / `Video.persistedFilename` API and round-trip tests
 - [ ] eliminate HDF5 diagnostic spam on passing analysis/JABS/DLC paths
 - [ ] resolve or explicitly scope out the real-world embedded-video path that currently reports `Unknown backend type: HDF5Video`
 - [ ] commit or intentionally discard ad hoc local stress tests before tagging

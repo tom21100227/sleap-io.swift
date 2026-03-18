@@ -2,7 +2,7 @@
 
 Native Swift library for reading, writing, and manipulating [SLEAP](https://sleap.ai) pose tracking data. Foundation layer for `sleap.swift` (training/inference) and `sleap-label.swift` (annotation GUI).
 
-**Platforms:** Apple platforms. HDF5-backed I/O is currently validated on macOS; iPad deployment for `SleapHDF5` still needs a portable libhdf5 packaging story.
+**Platforms:** Apple platforms. `v0.3.0` treats HDF5-backed `.slp` support on iPad as an official downstream release target through the vendored `CHDF5.xcframework` path, with final signoff gated on real downstream app validation.
 
 ## Supported Formats
 
@@ -54,25 +54,25 @@ try await eager.save(to: URL(fileURLWithPath: "output.slp"))
 swift build
 
 # Inspect a file
-.build/debug/sleapio info predictions.h5
-.build/debug/sleapio show labels.slp --limit 10
+.build/debug/sleap-io info predictions.h5
+.build/debug/sleap-io show labels.slp --limit 10
 
 # Convert between formats
-.build/debug/sleapio convert input.h5 output.csv
+.build/debug/sleap-io convert input.h5 output.csv
 ```
 
 ## Build & Test
 
 ```bash
-# Prerequisites
-brew install hdf5
-
-# Build
+# Build (default: vendored CHDF5 XCFramework, no Homebrew required)
 swift build
 
 # Test (requires generating fixtures first)
 uv run --with sleap-io --with h5py --with Pillow python3 Tests/Fixtures/generate_fixtures.py
 swift test
+
+# Optional: macOS-only system HDF5 path for local benchmarking/dev
+USE_SYSTEM_HDF5=1 swift build
 ```
 
 For local real-world stress assets in `Tests/Fixtures/stress/`, there is also
@@ -104,6 +104,7 @@ Sources/
 - **Identity semantics** — `Skeleton`, `Node`, `Track`, `Video`, `Instance` are reference types (`===` equality)
 - **Metal-ready points** — `PointsArray` stores interleaved Float32 `[x0, y0, x1, y1, ...]` matching `packed_float2`
 - **Actor-isolated HDF5** — All HDF5 access serialized through `HDF5FileActor`
+- **Persisted video relocation** — `Video.originalFilename` preserves provenance; `Video.persistedFilename` enables permanent relocation that survives save/reopen. Temporary relocation is session-only via `backendOpener`.
 
 ## Performance
 

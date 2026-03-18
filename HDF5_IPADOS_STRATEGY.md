@@ -1,6 +1,6 @@
 # HDF5 iPadOS Strategy
 
-Date: March 14, 2026
+Date: March 17, 2026
 
 ## Purpose
 
@@ -17,11 +17,12 @@ Scope note:
 Those broader alternatives are tracked separately in
 `IMPLEMENTATION_PLAN.md` under `iPad Compatibility Requirements`.
 
-The immediate problem is simple:
+Status update for `v0.3.0`:
 
-- `SleapHDF5` currently depends on `CHDF5`
-- `CHDF5` is a system-library target with a macOS/Homebrew development story
-- that is not a complete deployment story for iPadOS app builds
+- the package now defaults to a vendored `CHDF5.xcframework`
+- the release question is no longer "should we package HDF5 at all?"
+- the release question is whether the current packaged path is validated enough
+  to claim official downstream iPad `.slp` support
 
 The question is not whether HDF5 works in Swift. It already does on macOS.
 The question is how to package it so an iPad app can actually ship it.
@@ -32,7 +33,8 @@ Today the package looks like this:
 
 - `SleapIO`, `SleapVideo`, and `SleapRendering` are normal Swift targets
 - `SleapHDF5` depends on `CHDF5`
-- `CHDF5` assumes a system-installed libhdf5 discovered via `pkg-config`
+- `CHDF5` defaults to a vendored Apple XCFramework, with a system-library path
+  retained only as an explicit macOS development fallback
 
 That is acceptable for:
 
@@ -40,11 +42,11 @@ That is acceptable for:
 - local benchmarking
 - CLI work on a developer machine
 
-That is not sufficient for:
+The remaining release risk is:
 
-- App Store iPad builds
-- reproducible mobile CI
-- downstream app integration without custom local toolchain setup
+- proving a real downstream iPad app target with release-candidate bits
+- documenting the supported integration path clearly
+- making that validation part of the release gate
 
 ## Decision Criteria
 
@@ -163,41 +165,37 @@ Assessment:
 
 | Option | Short-term effort | Long-term maintainability | iPad app usability | Downstream DX | Recommendation |
 |---|---:|---:|---:|---:|---|
-| A. XCFramework / binary artifact | Medium-High | Good | Good | Good | Target state |
+| A. XCFramework / binary artifact | Medium-High | Good | Good | Good | `v0.3.0` release vehicle |
 | B. Static HDF5 build | High | Medium-Low | Good | Medium | Only if A is blocked |
-| C. Split package / macOS-only HDF5 for now | Low | Good short-term | Low for HDF5, good for core modules | Medium | Immediate posture |
+| C. Split package / macOS-only HDF5 for now | Low | Good short-term | Low for HDF5, good for core modules | Medium | Fallback only if `v0.3.0` slips |
 
 ## Recommendation
 
-Use a two-step strategy.
+Use a one-release strategy for `v0.3.0`.
 
-### Immediate decision
+### Release decision
 
-Adopt Option C as the official current posture:
-
-- be explicit that `SleapHDF5` is currently macOS-validated
-- stop implying that HDF5-backed I/O is already deployable on iPad
-- let downstream teams use the non-HDF5 modules on iPad without confusion
-
-Reason:
-
-- it matches reality
-- it unblocks planning immediately
-- it avoids spending product credibility on an incomplete packaging story
-
-### Target implementation path
-
-Pursue Option A as the intended production solution:
+Adopt Option A as the official release posture:
 
 - package libhdf5 as an Apple binary artifact
 - make `SleapHDF5` consume that artifact
-- validate the real app integration story in `sleap.swift`
+- validate the real app integration story in `sleap.swift` before tagging
 
 Reason:
 
 - it gives the cleanest downstream experience
 - it keeps one HDF5 implementation across macOS and iPadOS
 - it is easier to explain and support than a one-off static-link pipeline
+
+### Release rule
+
+If downstream iPad validation fails, slip `v0.3.0`.
+
+Do not:
+
+- relabel iPad support as "experimental" for the same release
+- switch to a new portable-format scope mid-release
+- treat package-only compilation as sufficient signoff
 
 ### Non-recommendation
 
@@ -215,44 +213,43 @@ weaker long-term developer experience.
 
 ## What This Means For `sleap.swift`
 
-Until portable HDF5 packaging exists:
+For `v0.3.0`, `sleap.swift` is the downstream proof point:
 
-- `sleap.swift` should not assume HDF5-backed formats are iPad-deployable
-- product planning should treat HDF5 I/O on iPad as a dependency that still
-  needs packaging work
-- any iPad feature that depends on `.slp`, analysis HDF5, JABS, or DLC through
-  `SleapHDF5` should be considered at risk until the packaging strategy is done
-
-In other words: this is a real integration blocker, not just a cleanup item.
+- it should validate the released-package integration path, not a local-only
+  source checkout shortcut
+- it should add a minimal iPad target or host app if needed for smoke
+  validation
+- it should treat open/edit/save/reopen on a real external-video `.slp` as the
+  release gate
+- it should also validate temporary vs permanent relocation behavior end to end
 
 ## Proposed Execution Plan
 
-### Phase 1: Truth in packaging and docs
+### Phase 1: Lock the release contract
 
-- mark HDF5-backed iPad deployment as unresolved
-- keep platform language precise in public docs
-- avoid release claims that imply end-to-end iPad HDF5 support
+- treat the vendored XCFramework path as the chosen deployment model
+- align root docs with the official iPad support posture
+- lock the persisted-relocation API in the release plan and API design docs
 
-### Phase 2: XCFramework spike
+### Phase 2: Validate downstream behavior
 
-- build a minimal Apple HDF5 artifact for the required targets
-- prove that `SleapHDF5` can link against it in a sample iPad app
-- verify one real `.slp` load path inside an app target, not just in package tests
+- prove that `SleapHDF5` links in a real downstream iPad target
+- verify one real external-video `.slp` open/edit/save/reopen path
+- verify temporary vs permanent relocation behavior in the downstream app flow
 
-### Phase 3: Productize
+### Phase 3: Tag only on passing proof
 
-- choose artifact hosting/versioning
-- wire CI around the packaged HDF5 dependency
-- add at least one iPad deployment validation step before release
+- keep the downstream validation step in the release gate
+- document the supported integration path for downstream teams
+- tag only when the smoke scenario is green
 
 ## Acceptance Criteria For Closing This Risk
 
-This issue is only closed when all of the following are true:
+This issue is only closed for `v0.3.0` when all of the following are true:
 
 1. `sleap.swift` can build for iPad without a developer-installed HDF5 toolchain.
-2. A real HDF5-backed format is load-tested in an iPad app target.
-3. The dependency story is documented for downstream teams.
-4. CI can reproduce the setup.
-
-Until then, `SleapHDF5` should be treated as macOS-validated rather than fully
-iPad-ready.
+2. A real external-video `.slp` is opened, edited, saved, and reopened in an
+   iPad app target using release-candidate bits.
+3. Temporary vs permanent relocation behavior is validated end to end.
+4. The dependency story is documented for downstream teams.
+5. The release checklist treats this validation as a hard gate.

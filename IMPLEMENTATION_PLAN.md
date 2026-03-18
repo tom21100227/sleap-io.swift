@@ -8,12 +8,25 @@ This is a detailed implementation plan for building a native Swift library that 
 
 The plan is organized into implementation steps within each phase, ordered by dependency. Each step lists the files to create, the key decisions, and acceptance criteria.
 
+## Current Release Target
+
+The active release handoff for the next tag is
+[`RELEASE_V0_3_0_PLAN.md`](./RELEASE_V0_3_0_PLAN.md).
+
+Use that document as the source of truth for:
+
+- official iPad `.slp` deployment through the vendored XCFramework path
+- the `Video.originalFilename` / `Video.persistedFilename` public API contract
+- temporary vs permanent relocation behavior
+- downstream `sleap.swift` validation required before tagging `v0.3.0`
+
 See also:
 - [FEASIBILITY.md](./FEASIBILITY.md) — Technical feasibility assessment
 - [API_DESIGN.md](./API_DESIGN.md) — Full public API surface specification
 - [PHASE3_SPEC.md](./PHASE3_SPEC.md) — Phase 3 interchange codec behavior
 - [PHASE4_SPEC.md](./PHASE4_SPEC.md) — Phase 4 advanced I/O + CLI behavior
 - [HDF5_IPADOS_STRATEGY.md](./HDF5_IPADOS_STRATEGY.md) — HDF5 deployment options for downstream iPad apps
+- [RELEASE_V0_3_0_PLAN.md](./RELEASE_V0_3_0_PLAN.md) — Release-specific implementation handoff for iPad support and persisted relocation
 - [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) — Release gate and go/no-go checklist
 
 ---
@@ -769,22 +782,16 @@ benchmark credibility.
 
 ### Portable HDF5 And iPad Deployment
 
-- Current HDF5 support is implemented through `CHDF5` as a system library
-  target with a Homebrew-based macOS development setup.
-- That is not, by itself, a shippable iPadOS packaging story for downstream
-  apps like `sleap.swift` or `sleap-label.swift`.
-- Before claiming iPad support for HDF5-backed formats, choose and implement
-  one explicit deployment strategy:
-  - vendor libhdf5 as an Apple-platform binary artifact / XCFramework
-  - ship a statically linked HDF5 build for supported Apple mobile targets
-  - or split the package so non-HDF5 modules remain iPad-ready while
-    `SleapHDF5` is macOS-only until portable packaging exists
-- Release notes and platform docs must distinguish:
-  - Apple-platform model/rendering code
-  - macOS-validated HDF5 I/O
-  - true iPad-deployable HDF5 support
-- Treat this as a downstream-integration blocker for `sleap.swift`, not as a
-  minor packaging nicety.
+- The package now has a vendored `CHDF5.xcframework` path and `v0.3.0` treats
+  that path as the release vehicle for official downstream iPad `.slp` support.
+- The remaining release work is not "invent a new portability strategy"; it is
+  to prove the current XCFramework-backed path in a real downstream app target.
+- `v0.3.0` should therefore distinguish:
+  - the packaged HDF5 runtime path used by `SleapHDF5`
+  - package-level build/test confidence
+  - downstream `sleap.swift` open/edit/save/reopen validation on iPad
+- Treat downstream validation as a release gate, not as optional follow-up
+  cleanup.
 
 ---
 
@@ -842,40 +849,40 @@ The following issues were identified during development of the native macOS/iPad
 SLEAP labelling GUI (`sleap.swift`). They block iPadOS support and affect
 large-file performance on macOS.
 
-### 1. SLP I/O is not portable to iPadOS (CRITICAL — blocks iPad entirely)
+### 1. HDF5-backed SLP on iPad needs downstream release validation (CRITICAL)
 
-**Problem:** All `.slp` load/save entry points live in `SleapHDF5`, which depends
-on `CHDF5` (a system library target requiring `brew install hdf5`). There is no
-way to install native HDF5 on iPadOS, so `.slp` files cannot be opened on iPad
-at all — including `.pkg.slp` files with embedded frames.
+**Problem:** The package now advertises Apple-platform support and ships a
+vendored HDF5 XCFramework, but the release still needs one real downstream app
+story that proves `.slp` open/edit/save/reopen on iPad using release-candidate
+`sleap-io.swift` bits.
 
-**Impact:** The GUI app cannot ship an iPadOS target until this is resolved.
+**Impact:** `v0.3.0` cannot claim official iPad `.slp` support until the
+downstream smoke test passes.
 
-**Related decision doc:** See `HDF5_IPADOS_STRATEGY.md` for the packaging-focused
-comparison of XCFramework vs static HDF5 build vs keeping `SleapHDF5`
-macOS-only for now. The options below are broader product-level alternatives.
+**Release posture for `v0.3.0`:**
 
-**Proposed solutions (in order of preference):**
-
-1. **Portable bundle format** — Define a non-HDF5 file format (e.g., JSON
-   metadata + embedded frame images in a directory or zip bundle) with load/save
-   entry points in `SleapIO` (no native dependency). This would allow iPadOS to
-   open a subset of SLEAP files without HDF5.
-
-2. **Pure-Swift HDF5 reader** — Implement enough of the HDF5 spec in pure Swift
-   to read `.slp` files. This eliminates the C dependency entirely but is a
-   significant engineering effort.
-
-3. **Mac-side export tool** — Add an "Export for iPad" command that converts
-   `.slp` → portable format. This is a workaround, not a fix, but unblocks
-   iPad viewing without changing the core I/O layer.
+1. Use the current vendored XCFramework path as the official deployment model.
+2. Do not introduce a separate portable file format in this release.
+3. Do not downgrade the release claim to "experimental" if validation fails;
+   slip the tag instead.
 
 **Where the dependency chain is:**
 
 - `Labels.load(from:)` and `Labels.save(to:)` are extensions in
   `Sources/SleapHDF5/SLP/LabelsIO.swift`
-- `SleapHDF5` depends on `CHDF5` (system library) in `Package.swift:26`
-- `CHDF5` requires `pkgConfig: "hdf5"` which needs `brew install hdf5`
+- `SleapHDF5` depends on `CHDF5` in `Package.swift`
+- `CHDF5` defaults to the vendored XCFramework path, with a system-library
+  fallback only for explicit macOS development workflows
+
+**Required downstream proof:**
+
+- build a real iPad app target or host app with release-candidate bits
+- open a real external-video `.slp`
+- render a frame
+- edit a label
+- save
+- reopen
+- verify the edit persisted
 
 ### 2. Frame metadata without materialization (HIGH — blocks lazy-loading perf)
 
