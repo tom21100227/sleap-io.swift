@@ -50,6 +50,40 @@ public final class Skeleton: Hashable, @unchecked Sendable {
 
     // MARK: - Node migration
 
+    /// Insert a node at a specific index and migrate all instances.
+    ///
+    /// This is the ordered-insertion counterpart of `addNode(_:migratingInstances:)`.
+    /// It is needed for correct undo of middle-node deletion, where the restored
+    /// node must go back to its original position (not appended at the end).
+    ///
+    /// - Parameters:
+    ///   - node: The node to insert. If a node with the same name already exists, this is a no-op.
+    ///   - index: The position at which to insert (clamped to `0...nodes.count`).
+    ///   - instances: All instances referencing this skeleton that should be migrated.
+    public func insertNode(_ node: Node, at index: Int, migratingInstances instances: [Instance]) {
+        guard _nameToNode[node.name] == nil else { return }
+
+        let clampedIndex = max(0, min(index, nodes.count))
+        nodes.insert(node, at: clampedIndex)
+        _rebuildCaches()
+
+        for instance in instances {
+            guard instance.skeleton === self else { continue }
+
+            let coordIdx = clampedIndex * 2
+            if let predicted = instance as? PredictedInstance {
+                predicted.predictedPoints.points.coordinates.insert(contentsOf: [Float.nan, Float.nan], at: coordIdx)
+                predicted.predictedPoints.points.visibility.insert(false, at: clampedIndex)
+                predicted.predictedPoints.points.completeness.insert(false, at: clampedIndex)
+                predicted.predictedPoints.scores.insert(0, at: clampedIndex)
+            } else {
+                instance.points.coordinates.insert(contentsOf: [Float.nan, Float.nan], at: coordIdx)
+                instance.points.visibility.insert(false, at: clampedIndex)
+                instance.points.completeness.insert(false, at: clampedIndex)
+            }
+        }
+    }
+
     /// Add a node and migrate all instances that reference this skeleton.
     ///
     /// The new node is appended to the skeleton's node list. For each instance,
