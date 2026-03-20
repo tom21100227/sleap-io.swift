@@ -63,7 +63,7 @@ public final class Skeleton: Hashable, @unchecked Sendable {
     public func insertNode(_ node: Node, at index: Int, migratingInstances instances: [Instance]) {
         guard _nameToNode[node.name] == nil else { return }
 
-        let clampedIndex = max(0, min(index, nodes.count))
+        let clampedIndex = Swift.max(0, Swift.min(index, nodes.count))
         nodes.insert(node, at: clampedIndex)
         _rebuildCaches()
 
