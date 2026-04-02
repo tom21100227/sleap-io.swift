@@ -19,21 +19,24 @@ private func makeSkeleton(nodeCount: Int) -> Skeleton {
 
 private func makeInstance(skeleton: Skeleton, track: Track? = nil, allVisible: Bool = true) -> Instance {
     let points = skeleton.nodes.enumerated().map { (i, _) in
-        Point(x: Float(10 * i + 10), y: Float(10 * i + 10), visible: allVisible)
+        let v = Float(10 * i + 10)
+        return Point(x: v, y: v, visible: allVisible)
     }
     return Instance(skeleton: skeleton, points: PointsArray(points: points), track: track)
 }
 
 private func makePredictedInstance(skeleton: Skeleton, score: Float = 0.95) -> PredictedInstance {
     let points = skeleton.nodes.enumerated().map { (i, _) in
-        PredictedPoint(x: Float(10 * i + 10), y: Float(10 * i + 10), visible: true, score: 0.9)
+        let v = Float(10 * i + 10)
+        return PredictedPoint(x: v, y: v, visible: true, score: 0.9)
     }
     return PredictedInstance(skeleton: skeleton, points: PredictedPointsArray(points: points), score: score)
 }
 
 private func makePartiallyVisibleInstance(skeleton: Skeleton) -> Instance {
     let points = skeleton.nodes.enumerated().map { (i, _) in
-        Point(x: Float(10 * i + 10), y: Float(10 * i + 10), visible: i % 2 == 0)
+        let v = Float(10 * i + 10)
+        return Point(x: v, y: v, visible: i % 2 == 0)
     }
     return Instance(skeleton: skeleton, points: PointsArray(points: points))
 }
@@ -233,7 +236,10 @@ final class PoseRendererTests: XCTestCase {
 
     func testAllInvisibleDrawsNothing() {
         let skel = makeSkeleton(nodeCount: 3)
-        let pts = (0..<3).map { Point(x: Float($0 * 10 + 20), y: Float($0 * 10 + 20), visible: false) }
+        let pts = (0..<3).map { i in
+            let v = Float(i * 10 + 20)
+            return Point(x: v, y: v, visible: false)
+        }
         let inst = Instance(skeleton: skel, points: PointsArray(points: pts))
         let image = makeTestImage()
         let result = PoseRenderer().render(instances: [inst], onto: image, skeleton: skel)
