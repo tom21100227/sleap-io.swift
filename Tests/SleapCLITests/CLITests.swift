@@ -1,5 +1,6 @@
 import XCTest
 
+#if os(macOS)
 final class CLITests: XCTestCase {
 
     // MARK: - Helpers
@@ -216,3 +217,4 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(result.exitCode, 1, "Nonexistent file should exit 1")
     }
 }
+#endif

@@ -1,0 +1,4 @@
+# Mark vendored HDF5 XCFramework as vendored so GitHub Linguist
+# excludes it from language statistics (otherwise 180 .h files
+# make the repo appear as a C project instead of Swift).
+Frameworks/** linguist-vendored

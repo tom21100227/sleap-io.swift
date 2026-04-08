@@ -54,6 +54,7 @@ final class StressTests: XCTestCase {
             .appendingPathComponent("sleap_stress_\(UUID().uuidString).\(ext)")
     }
 
+    #if os(macOS)
     private func cliBinaryURL() throws -> URL {
         let url = packageRoot.appendingPathComponent(".build/debug/sleap-io")
         guard FileManager.default.isExecutableFile(atPath: url.path) else {
@@ -61,7 +62,9 @@ final class StressTests: XCTestCase {
         }
         return url
     }
+    #endif
 
+    #if os(macOS)
     private func runCLI(_ args: [String]) throws -> (terminationReason: Process.TerminationReason, status: Int32, stdout: String, stderr: String) {
         let process = Process()
         process.executableURL = try cliBinaryURL()
@@ -86,6 +89,7 @@ final class StressTests: XCTestCase {
             stderr: String(data: stderrData, encoding: .utf8) ?? ""
         )
     }
+    #endif
 
     // MARK: - single_predictions.slp (2.2 MB, 5k frames, 1 pred/frame)
 
@@ -314,6 +318,7 @@ final class StressTests: XCTestCase {
         )
     }
 
+    #if os(macOS)
     func testTrainingEmbedded_cliRoundTripSave() async throws {
         let inputURL = try stressFixtureURL("training_embedded.pkg.slp")
         let outputURL = tempURL(extension: "pkg.slp")
@@ -367,6 +372,7 @@ final class StressTests: XCTestCase {
 
         emitBenchmark(fixture: "training_embedded", metric: "cli_same_path_save", seconds: elapsed)
     }
+    #endif
 
     // MARK: - large-prediction-tracked.slp (234 MB, 180k frames, 534k predicted instances, 3 tracks)
 
