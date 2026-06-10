@@ -1,0 +1,235 @@
+{
+  "milestones": [
+    {"title": "M1 — GUI editing core", "description": "Labels/Instance/Frame/Skeleton/Video API the GUI edits through + SwiftUI enablers. Highest priority (north star)."},
+    {"title": "M2 — Proofreading & merge", "description": "Matching/merge subsystem + LabeledFrame merge cascade for track proofreading."},
+    {"title": "M3 — SLP fidelity & modern formats", "description": "Read SLP >=1.6, fix provenance/identity round-trip, embed-on-save, sessions schema."},
+    {"title": "M4 — Video & relocation", "description": "Video model + missing-video relocation (incl. iPad bookmarks) + backend parity/perf."},
+    {"title": "M5 — Rendering & overlays", "description": "Track-color rendering, overlays, trails, render entry points, Metal path."},
+    {"title": "M6 — Training backend", "description": "numpy/tensor round-trip + training splits + geometric transforms for a sleap.swift backend."},
+    {"title": "M7 — Format coverage & dispatch/CLI", "description": "Interchange parity + new formats, unified load/save dispatch, sio CLI, umbrella API."},
+    {"title": "M8 — Deferred / out of scope", "description": "NWB, LEAP, remote/Drive loading, video-pipeline CLI. Tracked, not built now."}
+  ],
+  "epics": [
+    {
+      "id": "E1", "title": "E1 — Labels editing & navigation API", "milestone": "M1 — GUI editing core",
+      "labels": ["epic", "model", "gui-readiness"],
+      "body": "Container API the SwiftUI GUI drives on every edit/navigation. The Swift `Labels` is a thin ~384-line container vs Python's 4.0k-line `labels.py`. See MEGA_PLAN.md §E1 and GAP_ANALYSIS.md §4. Sub-issues are linked below.",
+      "subissues": [
+        {"id": "E1.1", "title": "O(1) frame & track index in Labels (fix O(n) frame lookup)", "labels": ["model", "perf", "gui-readiness"], "ref": "Labels.get_frame / reindex", "target": "Labels.swift", "desc": "Add a cached (videoIndex, frameIdx)->frame index and track->instances index. Invalidate on mutation. Fixes the known O(n) `frame(for:at:)` (~1.8ms on 180k frames) and unblocks the GUI FrameIndex.", "accept": "lookup matches linear scan on dense fixture; index rebuilds after add/remove; multi-video isolation; lazy path uses frameMetadata() without materializing.", "cx": "M"},
+        {"id": "E1.2", "title": "Rich Labels subscripts + find() with foreign-video resolution", "labels": ["model", "gui-readiness"], "ref": "Labels.__getitem__ / find / match_video", "target": "Labels.swift", "desc": "Overloads for int/range/[Int]/Video/(Video,Int); find(video:frameIdx:returnNew:) resolving a foreign Video object to the local one by path/content.", "accept": "each overload covered; foreign-video resolves; returnNew creates+registers a frame.", "cx": "M"},
+        {"id": "E1.3", "title": "Labels.copy() deep snapshot (safe save + undo)", "labels": ["model", "gui-readiness"], "ref": "Labels.copy(open_videos)", "target": "Labels.swift", "desc": "Identity-preserving deep clone so the GUI can snapshot before save (replaces the isSaving gate) and support undo.", "accept": "clone !== original but structurally equal; edits to clone don't touch original; identity tables deduped; lazy is materialized or copied safely.", "cx": "L"},
+        {"id": "E1.4", "title": "Labels.clean() + remove_predictions(clean:)", "labels": ["model", "gui-readiness"], "ref": "Labels.clean / remove_predictions", "target": "Labels.swift", "desc": "clean(frames:instances:skeletons:tracks:videos:) prunes empties + unused identity objects; remove_predictions strips predicted instances.", "accept": "removes empty frames but PRESERVES negative frames; prunes unused skeletons/tracks/videos when asked.", "cx": "M"},
+        {"id": "E1.5", "title": "Labels count accessors (n_user/n_pred/per-video/per-track)", "labels": ["model", "gui-readiness"], "ref": "Labels.n_user_instances / n_pred_instances / n_frames_per_video / n_instances_per_track", "target": "Labels.swift", "desc": "Add count accessors used by sidebars/QC; O(1) on lazy where possible.", "accept": "counts match known fixtures; lazy uses column row counts.", "cx": "S"},
+        {"id": "E1.6", "title": "Annotation query families (get_rois/masks/bboxes/centroids/label_images)", "labels": ["model", "gui-readiness"], "ref": "Labels.get_rois / get_masks / get_bboxes / get_centroids / get_label_images", "target": "Labels.swift", "desc": "Per-frame and per-video gather of annotation families. Returns what exists today; expands as E7 datasets land.", "accept": "gather by frame and by video; empty when absent.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E2", "title": "E2 — Instance / Frame / Point accessors", "milestone": "M1 — GUI editing core",
+      "labels": ["epic", "model", "gui-readiness"],
+      "body": "Behavioral accessors on Instance/PredictedInstance/LabeledFrame/PointsArray used by overlays, hit-testing, and the training backend. Mostly additive (S/M). See MEGA_PLAN.md §E2.",
+      "subissues": [
+        {"id": "E2.1", "title": "Instance/Frame numpy() export", "labels": ["model", "backend-readiness"], "ref": "Instance.numpy(invisible_as_nan) / PredictedInstance.numpy(scores) / LabeledFrame.numpy()", "target": "Instance.swift, PredictedInstance.swift, LabeledFrame.swift", "desc": "Array export: instance->(nNodes,2/3), invisible->NaN, predicted scores column, frame->(nInstances,nNodes,2).", "accept": "shapes correct; invisible→NaN; scores present; matches Python numpy() on a shared fixture.", "cx": "S"},
+        {"id": "E2.2", "title": "Instance n_visible / is_empty / centroid_xy / bounding_box", "labels": ["model", "gui-readiness"], "ref": "Instance.n_visible / is_empty / centroid_xy / bounding_box", "target": "Instance.swift", "desc": "Derived geometry used by selection, overlays, QC.", "accept": "visibility count; centroid ignores invisible; bbox of partially-visible instance correct (2,2).", "cx": "S"},
+        {"id": "E2.3", "title": "Instance.empty()/from_numpy factories", "labels": ["model", "backend-readiness"], "ref": "Instance.empty / from_numpy / PredictedInstance.empty(score=)", "target": "Instance.swift, PredictedInstance.swift", "desc": "Factories for empty (all-invisible) instances and array construction.", "accept": "empty instance all-invisible; from-array round-trips with E2.1.", "cx": "S"},
+        {"id": "E2.4", "title": "Instance.update_skeleton / replace_skeleton (point migration)", "labels": ["model", "gui-readiness"], "ref": "Instance.update_skeleton(names_only) / replace_skeleton(new, node_names_map)", "target": "Instance.swift, PointsArray.swift", "desc": "Resize PointsArray to a new node set, preserving points by node name. Used by GUI skeleton editing.", "accept": "add/remove node migrates points; rename map applied; predicted scores preserved.", "cx": "M"},
+        {"id": "E2.5", "title": "LabeledFrame remove_empty_instances/remove_predictions/unused_predictions/is_user_labeled/image", "labels": ["model", "gui-readiness"], "ref": "LabeledFrame.remove_empty_instances / remove_predictions / unused_predictions / is_user_labeled / image", "target": "LabeledFrame.swift", "desc": "Frame-level cleanup + classification helpers.", "accept": "drop all-invisible; predictions referenced by from_predicted excluded from unused; is_user_labeled correct.", "cx": "M"},
+        {"id": "E2.6", "title": "PointsArray.from_array / from_dict", "labels": ["model", "backend-readiness"], "ref": "PointsArray.from_array / from_dict(node->data)", "target": "PointsArray.swift", "desc": "Construct from (N,2)/(N,3) array (D inference) or dict keyed by node name.", "accept": "D inference; dict keyed by node name; visibility from NaN.", "cx": "S"}
+      ]
+    },
+    {
+      "id": "E3", "title": "E3 — Skeleton derived accessors & SLP codec fidelity", "milestone": "M1 — GUI editing core",
+      "labels": ["epic", "model", "parity", "gui-readiness"],
+      "body": "Skeleton mutation is solid; the derived-accessor surface (node_names/edge_inds/symmetry_inds/get_flipped_node_inds/…) and SLP skeleton codec fidelity are missing. E3.4 is a correctness item (round-trip with real .slp). See MEGA_PLAN.md §E3.",
+      "subissues": [
+        {"id": "E3.1", "title": "Skeleton derived accessors (node_names/edge_inds/symmetry_inds/subscripts)", "labels": ["model", "backend-readiness"], "ref": "Skeleton.node_names / edge_inds / edge_names / symmetry_inds / symmetry_names / __getitem__ / __contains__", "target": "Skeleton.swift", "desc": "Index/name derived views used everywhere downstream.", "accept": "values vs a known skeleton; name and int subscripts; contains.", "cx": "S"},
+        {"id": "E3.2", "title": "get_flipped_node_inds / require_node / match_nodes / matches / node_similarities", "labels": ["model"], "ref": "Skeleton.get_flipped_node_inds / require_node / match_nodes / matches / node_similarities", "target": "Skeleton.swift", "desc": "Symmetry-flip index list (augmentation/L-R), node matching for merge.", "accept": "flip pairs from symmetries; matcher returns (new_inds, old_inds); matches honors require_same_order.", "cx": "M"},
+        {"id": "E3.3", "title": "Skeleton-level rename_node(s) / reorder_nodes", "labels": ["model", "gui-readiness"], "ref": "Skeleton.rename_node / rename_nodes / reorder_nodes", "target": "Skeleton.swift", "desc": "Skeleton-level rename/reorder (migrating instance variants exist already).", "accept": "rename via map/list; reorder preserves edges/symmetries.", "cx": "M"},
+        {"id": "E3.4", "title": "SkeletonSLPEncoder/Decoder fidelity vs Python jsonpickle", "labels": ["io-slp", "parity", "bug"], "ref": "SkeletonSLPEncoder/Decoder (matching.py-adjacent)", "target": "SkeletonCodec.swift", "desc": "Match Python's integer node refs + EdgeType py/reduce/py/id + type-2 symmetry links + global node-superset dicts (currently embeds full py/state nodes + non-standard symmetry array).", "accept": "round-trip a Python-generated .slp skeleton structurally; Swift-written skeleton validated against Python.", "cx": "L"},
+        {"id": "E3.5", "title": "Standalone skeleton JSON + YAML codecs (load_skeleton/save_skeleton)", "labels": ["format", "parity"], "ref": "skeleton JSON (jsonpickle) + skeleton-yaml.ts + load_skeleton/save_skeleton", "target": "SkeletonCodec.swift, LabelsIO.swift", "desc": "Standalone skeleton file read/write + training-config skeleton detection.", "accept": "JSON/YAML round-trip; training-config skeleton parsed.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E4", "title": "E4 — SwiftUI integration enablers", "milestone": "M1 — GUI editing core",
+      "labels": ["epic", "gui-readiness"],
+      "body": "Cross-cutting glue making the model GUI-friendly without dictating UI: coordinate conventions, version/provenance stamping, error taxonomy, progress/cancellation, observability, concurrency contract. See MEGA_PLAN.md §E4 and GAP_ANALYSIS.md §2.",
+      "subissues": [
+        {"id": "E4.1", "title": "Coordinate-convention reference + helpers", "labels": ["documentation", "gui-readiness"], "ref": "pixel-center / 0.5 shift / y-down / NaN-as-invisible", "target": "SleapIO (new CoordinateConventions.swift + docs)", "desc": "Single documented invariant hub so a SwiftUI Canvas overlay agrees on y-direction and invisible sentinel. Prevents mirror/flip bugs in hit-testing.", "accept": "round-trip helpers; documented examples; image-space<->view-space helper tested.", "cx": "S"},
+        {"id": "E4.2", "title": "SleapIO.version constant + provenance stamping + format introspection", "labels": ["gui-readiness", "io-slp"], "ref": "sleap_io.__version__ + provenance['sleap_io_version']", "target": "SleapIO (Version.swift), SLPWriter.swift", "desc": "Public version constant; stamp provenance on save; introspect supported SLP versions/codecs.", "accept": "version present; stamp on save; introspection lists formats.", "cx": "S"},
+        {"id": "E4.3", "title": "Error taxonomy + ErrorMode (strict/warn/continue)", "labels": ["gui-readiness"], "ref": "ErrorMode + RemoteIOError/MergeError/SkeletonMismatchError", "target": "SleapIOError.swift", "desc": "Split recoverable vs fatal; add missingVideo/skeletonMismatch/mergeConflict; ErrorMode param for load/merge.", "accept": "each mode's behavior on a bad frame; typed errors drive differentiated recovery.", "cx": "M"},
+        {"id": "E4.4", "title": "Progress + cancellation contract for load/save/merge/embed", "labels": ["gui-readiness", "perf"], "ref": "progress_callback (merge/render/embed/load)", "target": "LabelsIO.swift, SLPReader/Writer, EmbeddedVideo", "desc": "AsyncStream<Progress> (or callback) + Task cancellation checks in column reader + embed loop.", "accept": "progress monotonic; cancel stops work promptly; no partial-write corruption on cancel.", "cx": "M"},
+        {"id": "E4.5", "title": "Observable-friendliness + stable Identifiable/Hashable", "labels": ["gui-readiness"], "ref": "AGENTS.md rule #5 (revision bridge)", "target": "Labels/LabeledFrame/Instance/Skeleton/Track", "desc": "Documented change-notification signal on mutation + stable Identifiable/Hashable on identity types, without breaking @unchecked Sendable.", "accept": "identity hashing stable across edits; notification fires on point edit / track change / add-remove.", "cx": "L"},
+        {"id": "E4.6", "title": "Concurrency / snapshot isolation contract", "labels": ["gui-readiness", "backend-readiness"], "ref": "@MainActor GUI + background training handoff", "target": "docs + Labels.copy (E1.3)", "desc": "Document safe handoff (use copy()); audit @unchecked Sendable; isolation domains for background export.", "accept": "concurrency stress test (extend StressTests) passes; documented handoff pattern.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E5", "title": "E5 — Matching subsystem", "milestone": "M2 — Proofreading & merge",
+      "labels": ["epic", "model", "parity"],
+      "body": "Port matching.py / matching.ts (~1900 LOC) — entirely absent in Swift. Foundation for merge/proofreading. See MEGA_PLAN.md §E5.",
+      "subissues": [
+        {"id": "E5.1", "title": "SkeletonMatcher + Skeleton.matches/node_similarities", "labels": ["model", "parity"], "ref": "SkeletonMatcher / SkeletonMatchMethod (EXACT/STRUCTURE/OVERLAP/SUBSET)", "target": "SleapIO/Matching", "desc": "Skeleton correspondence by method.", "accept": "method matrix vs constructed skeletons mirrors Python tests.", "cx": "M"},
+        {"id": "E5.2", "title": "InstanceMatcher + Instance.same_pose_as/same_identity_as/overlaps_with", "labels": ["model", "parity"], "ref": "InstanceMatcher / InstanceMatchMethod (SPATIAL/IDENTITY/IOU)", "target": "SleapIO/Matching, Instance.swift", "desc": "Instance correspondence + IoU overlap.", "accept": "spatial/identity/IoU matrices; iou_threshold honored.", "cx": "M"},
+        {"id": "E5.3", "title": "TrackMatcher + VideoMatcher + is_same_file", "labels": ["model", "parity"], "ref": "TrackMatcher (NAME/IDENTITY) / VideoMatcher (PATH/BASENAME/CONTENT/AUTO/IMAGE_DEDUP/SHAPE)", "target": "SleapIO/Matching, Track.swift, Video.swift", "desc": "Track + video correspondence cascade.", "accept": "track matches by name/identity; video match cascade; is_same_file by path/content.", "cx": "L"},
+        {"id": "E5.4", "title": "Result types: MatchResult/MergeResult/ConflictResolution/FrameStrategy/errors", "labels": ["model", "parity"], "ref": "MatchResult / MergeResult / ConflictResolution / FrameStrategy / MergeError / SkeletonMismatchError", "target": "SleapIO/Matching", "desc": "Structured results consumed by E6.", "accept": "types encode conflicts + summary counts; errors carry recovery context.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E6", "title": "E6 — Merge & match cascade", "milestone": "M2 — Proofreading & merge",
+      "labels": ["epic", "model", "parity", "gui-readiness"],
+      "body": "Replace the identity-only merge stub with the real matcher-driven cascade returning conflicts + provenance history. See MEGA_PLAN.md §E6.",
+      "subissues": [
+        {"id": "E6.1", "title": "Real LabeledFrame.merge cascade (returns conflicts)", "labels": ["model", "parity"], "ref": "LabeledFrame.merge(other, instance, frame) -> (merged, conflicts)", "target": "LabeledFrame.swift", "desc": "Spatial matching, frame-level annotation merge, is_negative resolution, conflict return.", "accept": "spatial dedup; conflicts reported; negative resolved; frame annotations merged.", "cx": "L"},
+        {"id": "E6.2", "title": "Labels.merge(...)->MergeResult + Labels.match->MatchResult", "labels": ["model", "parity", "gui-readiness"], "ref": "Labels.merge(skeleton, video, track, frame, instance, validate, progress, error_mode) -> MergeResult; Labels.match -> MatchResult", "target": "Labels.swift", "desc": "Matcher-driven merge + provenance.merge_history; replaces current stub.", "accept": "merge two overlapping projects; history recorded; matchers + error_mode honored.", "cx": "XL"}
+      ]
+    },
+    {
+      "id": "E7", "title": "E7 — SLP format >=1.6 + annotation datasets", "milestone": "M3 — SLP fidelity & modern formats",
+      "labels": ["epic", "io-slp", "parity"],
+      "body": "We hard-cap reads at 1.5 and throw on modern files SLEAP writes today (1.9/2.0/2.1/2.3/2.4). Add version read/migration + missing annotation datasets. See MEGA_PLAN.md §E7 and GAP_ANALYSIS.md §1.",
+      "subissues": [
+        {"id": "E7.1", "title": "Read SLP 1.6–2.4 (remove kMaxSupportedFormatVersion cap)", "labels": ["io-slp", "parity", "bug"], "ref": "format_id >=1.6", "target": "SLPReader.swift, SLPMetadata.swift", "desc": "Read newer files, gracefully skipping unknown fields; keep known version-specific behaviors.", "accept": "open a Python-written 2.x fixture without throwing; known datasets read.", "cx": "M"},
+        {"id": "E7.2", "title": "Write-version migration (minimal format_id from features)", "labels": ["io-slp", "parity"], "ref": "format_id selection + downgrade-on-save", "target": "SLPWriter.swift", "desc": "Choose minimal format_id by features present; allow downgrade for interop with deployed SLEAP.", "accept": "points-only writes 1.2-class; masks/bboxes bump version; old SLEAP can open downgraded output.", "cx": "L"},
+        {"id": "E7.3", "title": "/bboxes dataset + BoundingBox model hierarchy", "labels": ["io-slp", "model", "parity"], "ref": "read_bboxes/write_bboxes; BoundingBox/UserBoundingBox/PredictedBoundingBox", "target": "SLPReader/Writer, new BoundingBox.swift", "desc": "Columnar v2.0 + legacy struct.", "accept": "round-trip bboxes from a Python fixture.", "cx": "L"},
+        {"id": "E7.4", "title": "/centroids dataset + Centroid model hierarchy", "labels": ["io-slp", "model", "parity"], "ref": "read_centroids/write_centroids; UserCentroid/PredictedCentroid", "target": "SLPReader/Writer, new Centroid.swift", "desc": "Centroid annotations (also used by TrackMate).", "accept": "round-trip centroids from a fixture.", "cx": "M"},
+        {"id": "E7.5", "title": "/identities_json + Identity model", "labels": ["io-slp", "model", "parity"], "ref": "read_identities/write_identities; Identity(name,color,metadata)", "target": "SLPReader/Writer, new Identity.swift", "desc": "Identity annotations.", "accept": "round-trip identities.", "cx": "S"},
+        {"id": "E7.6", "title": "/label_images + LabelImage model (v2.2 chunked)", "labels": ["io-slp", "model", "parity"], "ref": "read_label_images/write_label_images; LabelImage/PredictedLabelImage", "target": "SLPReader/Writer, new LabelImage.swift", "desc": "Dense integer per-pixel segmentation; lazy HDF5 handle; rank-3 chunked. Coordinate with E17.8 TIFF.", "accept": "round-trip label image; lazy read of one image.", "cx": "XL"}
+      ]
+    },
+    {
+      "id": "E8", "title": "E8 — Provenance & identity round-trip fidelity", "milestone": "M3 — SLP fidelity & modern formats",
+      "labels": ["epic", "io-slp", "parity", "bug"],
+      "body": "Two correctness bugs: provenance is coerced to [String:String] (silent data loss) and decode may duplicate identity objects. See GAP_ANALYSIS.md §1 findings 1 & cross-cutting. MEGA_PLAN.md §E8.",
+      "subissues": [
+        {"id": "E8.1", "title": "Provenance dict[str,Any] via JSONValue (stop data loss)", "labels": ["io-slp", "bug", "parity"], "ref": "provenance: dict[str, Any]", "target": "Labels.swift, DictionaryCodec.swift, SLPMetadata.swift, codecs", "desc": "Introduce JSONValue enum; store provenance:[String:JSONValue]; read/write non-string values everywhere.", "accept": "round-trip int/float/list/nested from a Python fixture with no loss.", "cx": "M"},
+        {"id": "E8.2", "title": "Identity-interning on decode across all codecs", "labels": ["model", "bug", "parity"], "ref": "_register_skeleton/update/reindex; index-based dict schema", "target": "DictionaryCodec.swift + all codecs", "desc": "Ensure frame.video/instance.skeleton/track resolve to the SAME identity-table object (===). Canonicalize DictionaryCodec to index-based labeled_frames/video_idx/skeleton_idx.", "accept": "after dict round-trip frame.video === labels.videos[i]; no duplicate skeletons; === invariant holds.", "cx": "M"},
+        {"id": "E8.3", "title": "Negative-frame semantics propagation (clean/merge/export/classify)", "labels": ["model", "parity"], "ref": "is_negative through clean/merge/to_dict/classification", "target": "LabeledFrame.swift, Labels.swift", "desc": "The stored isNegative is inert; thread it through clean (preserve), merge (resolve), export, and classification.", "accept": "negatives survive clean; merge resolves; classification user/negative/empty correct.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E9", "title": "E9 — Embed-on-save & video lineage", "milestone": "M3 — SLP fidelity & modern formats",
+      "labels": ["epic", "io-slp", "video", "parity"],
+      "body": "No embed-on-save pipeline (Swift can only copy pre-existing embedded groups). Needed for packaging projects + iPad. See MEGA_PLAN.md §E9.",
+      "subissues": [
+        {"id": "E9.1", "title": "Embed pipeline (embed=all/user/suggestions/source/list + VideoReferenceMode)", "labels": ["io-slp", "video", "parity"], "ref": "embed_videos/embed_frames; VideoReferenceMode (EMBED/RESTORE_ORIGINAL/PRESERVE_SOURCE)", "target": "SLPWriter.swift, EmbeddedVideo.swift", "desc": "Encode selected frames to embedded PNG/JPEG groups on save.", "accept": "embed a real external-video .slp, reopen, verify frames; user vs all selection.", "cx": "XL"},
+        {"id": "E9.2", "title": "source_video/original_video lineage + restore_original_videos", "labels": ["io-slp", "video", "parity"], "ref": "source_video/original_video; videos_json self-reference", "target": "SLPWriter.swift, Video.swift", "desc": "Preserve lineage on save + restore mode.", "accept": "restore mode keeps external path; embedded carries source_video.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E10", "title": "E10 — Sessions / cameras calibration parity", "milestone": "M3 — SLP fidelity & modern formats",
+      "labels": ["epic", "model", "parity"],
+      "body": "Swift uses a bespoke camera_to_video schema incompatible with Python/JS calibration+camcorder_to_video_idx_map+frame_group_dicts, dropping all multiview data. Lower priority (single-camera GUI first). MEGA_PLAN.md §E10.",
+      "subissues": [
+        {"id": "E10.1", "title": "Adopt Python session schema (calibration + maps + frame_group_dicts)", "labels": ["io-slp", "model", "parity", "bug"], "ref": "calibration / camcorder_to_video_idx_map / frame_group_dicts", "target": "RecordingSession.swift, SLP session IO", "desc": "Replace bespoke schema; round-trip multiview sessions.", "accept": "round-trip a Python multiview .slp session.", "cx": "L"},
+        {"id": "E10.2", "title": "Camera math (Rodrigues, extrinsic decomposition, CameraGroup)", "labels": ["model", "parity"], "ref": "rodrigues_transformation / extrinsic_matrix get-set / CameraGroup", "target": "Camera.swift", "desc": "Rotation<->rvec, extrinsic decomposition, validation, group container.", "accept": "Rodrigues round-trip; extrinsic decompose/recompose; rvec/tvec validation.", "cx": "L"},
+        {"id": "E10.3", "title": "FrameGroup/InstanceGroup/Instance3D aggregation + serialization", "labels": ["model", "parity"], "ref": "FrameGroup / InstanceGroup / Instance3D", "target": "RecordingSession.swift, new Instance3D.swift", "desc": "3D point aggregation across cameras + serialization.", "accept": "make/serialize frame+instance groups; 3D points gathered.", "cx": "L"}
+      ]
+    },
+    {
+      "id": "E11", "title": "E11 — Video model & relocation", "milestone": "M4 — Video & relocation",
+      "labels": ["epic", "video", "gui-readiness"],
+      "body": "Missing-video relocation blocks opening projects across machines/iPad (the VideoRelocator TODO + iPad strategy persisted-relocation API). See GAP_ANALYSIS.md §2. MEGA_PLAN.md §E11.",
+      "subissues": [
+        {"id": "E11.1", "title": "Video accessors (shape/grayscale/exists/open/fps/time mapping)", "labels": ["video", "gui-readiness"], "ref": "Video.shape / grayscale / exists / is_open / open / close / from_filename / fps / frame_to_seconds", "target": "Video.swift", "desc": "Core Video metadata + lifecycle.", "accept": "shape/len; grayscale get/set; exists; fps; time<->index helpers.", "cx": "M"},
+        {"id": "E11.2", "title": "Video.replace_filename + matches_path/content/shape", "labels": ["video", "gui-readiness"], "ref": "Video.replace_filename / matches_path / matches_content / matches_shape", "target": "Video.swift", "desc": "Path update + identity matching for relocation.", "accept": "replace updates backend; matches_* correct.", "cx": "M"},
+        {"id": "E11.3", "title": "Labels.add_video/replace_videos/replace_filenames/match_video + open_videos defer", "labels": ["video", "model", "gui-readiness"], "ref": "Labels.add_video / replace_videos / replace_filenames(list|map|prefix) / match_video; open_videos=false", "target": "Labels.swift", "desc": "Project-level relocation + defer-open so a project loads with broken paths.", "accept": "open with missing video (deferred); relocate; save; reopen.", "cx": "L"},
+        {"id": "E11.4", "title": "iPadOS security-scoped bookmark relocation", "labels": ["video", "gui-readiness"], "ref": "persisted relocation (HDF5_IPADOS_STRATEGY.md)", "target": "Video.swift / SleapVideo", "desc": "Persist a security-scoped bookmark, not just a string path (the permanent-relocation TODO).", "accept": "bookmark persists across reopen; temporary vs permanent relocation distinguished.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E12", "title": "E12 — Video backends parity & perf", "milestone": "M4 — Video & relocation",
+      "labels": ["epic", "video", "perf", "parity"],
+      "body": "Three read paths work; grayscale/SEQ/TIFF/crop/writer/prefetch missing. See MEGA_PLAN.md §E12.",
+      "subissues": [
+        {"id": "E12.1", "title": "Real AVFoundation prefetch", "labels": ["video", "perf", "gui-readiness"], "ref": "Video.prefetch (currently no-op)", "target": "AVFoundationBackend.swift", "desc": "Warm FrameCache around the requested index for smooth scrubbing.", "accept": "prefetch populates cache; scrub hit-rate improves in a timing test.", "cx": "M"},
+        {"id": "E12.2", "title": "Grayscale autodetect + raw (H,W,C) frame output", "labels": ["video", "backend-readiness"], "ref": "detect_grayscale + (H,W,C) ndarray contract", "target": "VideoBackend.swift + backends", "desc": "Autodetect/force grayscale; expose raw pixel array alongside CGImage.", "accept": "grayscale collapse; raw array shape (H,W,C).", "cx": "M"},
+        {"id": "E12.3", "title": "Single-frame hyperslab read for embedded HDF5 (issue #135)", "labels": ["video", "perf", "io-slp"], "ref": "single-frame hyperslab vs full dataset", "target": "HDF5VideoBackend.swift / EmbeddedVideo.swift", "desc": "Slice one frame from the embedded dataset instead of materializing it.", "accept": "reads one frame without loading the whole dataset; memory bounded.", "cx": "L"},
+        {"id": "E12.4", "title": "SeqVideo (Norpix .seq) backend", "labels": ["video", "parity"], "ref": "SeqVideo / SeqVideoBackend", "target": "SleapVideo (new SeqVideoBackend.swift)", "desc": "Norpix StreamPix .seq reader (header/index/timestamps).", "accept": "read frames + count from a .seq fixture.", "cx": "L"},
+        {"id": "E12.5", "title": "TiffVideo backend (multi-page + rank-3/4 stacks)", "labels": ["video", "parity"], "ref": "TiffVideo", "target": "SleapVideo (new TiffVideoBackend.swift)", "desc": "Multi-page + THW/HWT + THWC/CHWT stacks.", "accept": "read frames from a tiff stack fixture.", "cx": "L"},
+        {"id": "E12.6", "title": "CropVideoBackend (virtual on-read crop, SLP 2.3)", "labels": ["video", "parity"], "ref": "CropVideoBackend / video_crops", "target": "SleapVideo (new CropVideoBackend.swift)", "desc": "Virtual axis-aligned crop with coord mapping.", "accept": "to_crop/to_source coords; wraps inner backend.", "cx": "L"},
+        {"id": "E12.7", "title": "VideoWriter (AVAssetWriter) + save_video", "labels": ["video", "backend-readiness"], "ref": "VideoWriter / save_video", "target": "SleapVideo (new VideoWriter.swift)", "desc": "mp4 encode (codec/crf/keyframe interval); enables render/transform.", "accept": "write frames to mp4; reopen + frame count matches.", "cx": "L"}
+      ]
+    },
+    {
+      "id": "E13", "title": "E13 — Rendering parity", "milestone": "M5 — Rendering & overlays",
+      "labels": ["epic", "rendering", "gui-readiness"],
+      "body": "Minimal CG renderer; missing track-color coloring, marker shapes, overlays (models exist but aren't drawn), trails, render entry points. See MEGA_PLAN.md §E13.",
+      "subissues": [
+        {"id": "E13.1", "title": "Color system (color_by/ColorScheme/resolve_color/palettes)", "labels": ["rendering", "gui-readiness"], "ref": "color_by (track/instance/node/auto) / resolve_color / palettes", "target": "Colors.swift, RenderOptions.swift", "desc": "Track-consistent coloring is essential for proofreading.", "accept": "color_by=track stable across frames; palettes; spec resolution.", "cx": "M"},
+        {"id": "E13.2", "title": "Marker shapes + visibility/score-aware styling", "labels": ["rendering"], "ref": "MarkerShape + hollow/filled + score text", "target": "PoseRenderer.swift", "desc": "Five marker shapes; hollow for invisible/incomplete; score labels.", "accept": "shapes render; invisible nodes styled distinctly.", "cx": "S"},
+        {"id": "E13.3", "title": "Overlays: masks/label_image/rois/bboxes/centroids", "labels": ["rendering", "gui-readiness"], "ref": "draw_masks / draw_label_image / draw_rois / draw_bboxes / draw_centroids", "target": "PoseRenderer.swift", "desc": "Wire existing models to the renderer.", "accept": "each overlay draws; per-track coloring.", "cx": "L"},
+        {"id": "E13.4", "title": "Motion trails", "labels": ["rendering"], "ref": "draw_trails / _compute_trails", "target": "PoseRenderer.swift", "desc": "Per-node motion trails over a window.", "accept": "trail length/fade; node selection.", "cx": "L"},
+        {"id": "E13.5", "title": "render_image entry + background + image export", "labels": ["rendering", "gui-readiness"], "ref": "render_image(source=Labels|LabeledFrame|[Instance]) + background + PNG/JPEG export", "target": "SleapRendering (new RenderImage.swift)", "desc": "High-level single-image render + export.", "accept": "render frame to image; save PNG/JPEG; background synthesis.", "cx": "M"},
+        {"id": "E13.6", "title": "render_video (frame iteration + writer + progress)", "labels": ["rendering"], "ref": "render_video", "target": "SleapRendering", "desc": "Iterate frames, composite, encode via E12.7, report progress.", "accept": "render a short overlay video; progress reported.", "cx": "L"}
+      ]
+    },
+    {
+      "id": "E14", "title": "E14 — High-instance-count performance (Metal)", "milestone": "M5 — Rendering & overlays",
+      "labels": ["epic", "rendering", "perf", "gui-readiness"],
+      "body": "GUI Phase 4.4: Metal path for 100+ instances using the packed_float2 PointsArray layout for zero-copy upload. MEGA_PLAN.md §E14.",
+      "subissues": [
+        {"id": "E14.1", "title": "Metal rendering path for 100+ instances", "labels": ["rendering", "perf"], "ref": "Metal overlay path", "target": "SleapRendering (Metal)", "desc": "Zero-copy upload of interleaved Float32 points; instanced draw of nodes/edges.", "accept": "renders 100+ instances at interactive frame rate; matches CG output visually.", "cx": "XL"}
+      ]
+    },
+    {
+      "id": "E15", "title": "E15 — numpy/tensor & training splits", "milestone": "M6 — Training backend",
+      "labels": ["epic", "backend-readiness", "parity"],
+      "body": "TensorCodec has two correctness bugs (frame axis, untracked slotting). Add full numpy/from_numpy/splits/LabelsSet for a sleap.swift backend. See GAP_ANALYSIS.md §5. MEGA_PLAN.md §E15.",
+      "subissues": [
+        {"id": "E15.1", "title": "Fix TensorCodec frame-axis + untracked-slot bugs", "labels": ["backend-readiness", "bug", "parity"], "ref": "to_numpy frame axis = frame_idx-first_frame; untracked positional slotting", "target": "TensorCodec.swift", "desc": "Frame axis currently uses store position (wrong); untracked instances collapse into slot 0 (overwrite).", "accept": "matches Python to_numpy on a shared fixture; untracked instances preserved.", "cx": "M"},
+        {"id": "E15.2", "title": "Labels.numpy(video/untracked/returnConfidence/userInstances)", "labels": ["backend-readiness", "parity"], "ref": "Labels.numpy + frame-axis alignment to video length", "target": "Labels.swift, TensorCodec.swift", "desc": "Full options + n_frames spans video length.", "accept": "options honored; frame axis spans first..last.", "cx": "M"},
+        {"id": "E15.3", "title": "Labels.from_numpy / update_from_numpy", "labels": ["backend-readiness", "parity"], "ref": "Labels.from_numpy / update_from_numpy(create_missing)", "target": "Labels.swift", "desc": "Array -> Labels factory + in-place update.", "accept": "round-trip with E15.2; update creates missing tracks/frames when asked.", "cx": "L"},
+        {"id": "E15.4", "title": "to_analysis_arrays builder + LazyDataStore fast numpy path", "labels": ["backend-readiness", "parity", "perf"], "ref": "to_analysis_arrays (occupancy/locations/scores) + lazy to_numpy", "target": "TensorCodec.swift, LazyDataStore.swift", "desc": "Occupancy/locations/point+instance+tracking scores tuple; fast path off the column store.", "accept": "arrays match Python; lazy path avoids materialization.", "cx": "L"},
+        {"id": "E15.5", "title": "Labels.split / make_training_splits + LabelsSet", "labels": ["backend-readiness", "parity"], "ref": "split(n,seed) / make_training_splits / LabelsSet.save(dir,embed,format)", "target": "Labels.swift, new LabelsSet.swift", "desc": "Train/val/test splits + multi-file container.", "accept": "deterministic split by seed; LabelsSet saves slp/ultralytics.", "cx": "L"}
+      ]
+    },
+    {
+      "id": "E16", "title": "E16 — Geometric transforms parity", "milestone": "M6 — Training backend",
+      "labels": ["epic", "parity"],
+      "body": "Has an affine toolkit + Instance helpers; missing the unified Transform pipeline, flip/pad, crop-offset, frame/video transforms, OOB masking. MEGA_PLAN.md §E16.",
+      "subissues": [
+        {"id": "E16.1", "title": "Unified Transform (crop/scale/rotate/pad/flip) + to_matrix/output_size", "labels": ["parity"], "ref": "transform.core.Transform / to_matrix / output_size", "target": "SleapIO/Transforms (new Transform.swift)", "desc": "Composable fixed-order pipeline + matrix/output-size.", "accept": "to_matrix vs Python; output_size incl. rotation expansion.", "cx": "M"},
+        {"id": "E16.2", "title": "apply_to_points (NaN-preserving) + crop/uncrop + OOB + flip", "labels": ["parity", "backend-readiness"], "ref": "points.crop/uncrop_points / count_out_of_bounds / flip_h/flip_v", "target": "PointsArrayTransforms.swift, InstanceTransforms.swift", "desc": "Point ops with NaN preservation + OOB masks + mirror.", "accept": "NaN preserved; crop offset; OOB mask; flip mirrors coords.", "cx": "M"},
+        {"id": "E16.3", "title": "Frame/image transforms (crop/scale/rotate/flip/pad)", "labels": ["parity"], "ref": "frame.crop_frame/scale_frame/rotate_frame/flip/pad", "target": "SleapIO/Transforms or SleapVideo", "desc": "Image-level transforms with OOB fill.", "accept": "crop/scale/rotate/flip/pad match reference on a test image.", "cx": "L"},
+        {"id": "E16.4", "title": "transform_labels/transform_video + compute_transform_summary", "labels": ["parity"], "ref": "video.transform_labels / transform_video / compute_transform_summary", "target": "SleapVideo + Labels", "desc": "Apply transform to all videos + adjust coords + mark OOB invisible + dry-run warnings. Depends on E12.7.", "accept": "transform a small labels+video; coords adjusted; OOB marked; summary warnings.", "cx": "L"}
+      ]
+    },
+    {
+      "id": "E17", "title": "E17 — Interchange parity & new formats", "milestone": "M7 — Format coverage & dispatch/CLI",
+      "labels": ["epic", "format", "parity"],
+      "body": "Several codecs read/write the wrong on-disk schema and can't interop with real files; plus missing GeoJSON/TrackMate. Each fix needs a Python/JS-generated regression fixture. See GAP_ANALYSIS.md §1 finding 3. MEGA_PLAN.md §E17.",
+      "subissues": [
+        {"id": "E17.1", "title": "Fix AlphaTracker reader to real schema", "labels": ["format", "bug", "parity"], "ref": "real AT: [{filename, class:image, annotations:[Face, point...]}]", "target": "AlphaTrackerCodec.swift", "desc": "Current reader expects an invented schema and throws on every real file.", "accept": "read a real AlphaTracker sample.", "cx": "M"},
+        {"id": "E17.2", "title": "Fix AnalysisHDF5 to tracks dataset + MATLAB axis preset", "labels": ["format", "bug", "parity"], "ref": "tracks dataset + dims/preset attrs + occupancy/untracked slotting", "target": "AnalysisHDF5Codec.swift", "desc": "Swift uses 'locations' (T,N,K,2); real format is 'tracks' MATLAB (n_tracks,2,n_nodes,n_frames).", "accept": "read a Python analysis .h5; preset/axis correct.", "cx": "L"},
+        {"id": "E17.3", "title": "Fix JABS to pose-version model (v2–v5, y/x flip, Mouse skeleton)", "labels": ["format", "bug", "parity"], "ref": "poseest v2/v3/v4/v5 + y/x flip + built-in 12-node Mouse", "target": "JABSCodec.swift", "desc": "Current generic reader interops with neither Python nor JS.", "accept": "read/write a real JABS file; built-in skeleton/edges/symmetries.", "cx": "L"},
+        {"id": "E17.4", "title": "Fix Label Studio to rectanglelabels + relation", "labels": ["format", "bug", "parity"], "ref": "rectanglelabels-individuals + relation(from_id/to_id), auto node infer", "target": "LabelStudioCodec.swift", "desc": "Current parentID convention is non-interoperable both directions.", "accept": "round-trip with a Python LS export; nodes inferred.", "cx": "M"},
+        {"id": "E17.5", "title": "CSV pandas family (sleap/dlc/points/instances/frames + auto-detect)", "labels": ["format", "parity"], "ref": "csv format family + metadata sidecar", "target": "CSVCodec.swift", "desc": "Swift implements a different long-table format with zero overlap.", "accept": "read/write each format; auto-detect; sidecar metadata.", "cx": "L"},
+        {"id": "E17.6", "title": "COCO completeness (segmentation/bboxes/visibility/tracks/root)", "labels": ["format", "parity"], "ref": "COCO segmentation (polygon+RLE), bboxes, visibility encoding, object_id tracks, dataset root", "target": "COCOCodec.swift", "desc": "Keypoints path close; detection/segmentation/tracks missing.", "accept": "segmentation + bbox + track export round-trip.", "cx": "M"},
+        {"id": "E17.7", "title": "GeoJSON ROIs + ROI geometry upgrade + WKB Multi*", "labels": ["format", "model", "parity"], "ref": "read_rois/write_rois (geojson) + ROI Polygon/MultiPolygon/__geo_interface__ + WKB", "target": "new GeoJSONCodec.swift, ROI.swift", "desc": "ROI is a flat point struct; upgrade geometry + add GeoJSON.", "accept": "round-trip GeoJSON ROIs; from_polygon/box/is_bbox/area/centroid/bounds.", "cx": "L"},
+        {"id": "E17.8", "title": "TrackMate CSV reader + Centroid model + annotation-only frames", "labels": ["format", "parity"], "ref": "trackmate.read_trackmate_csv / is_trackmate_file", "target": "new TrackMateCodec.swift", "desc": "Needs Centroid model (E7.4) + undistributed annotation routing.", "accept": "read a TrackMate CSV; centroids placed.", "cx": "M"},
+        {"id": "E17.9", "title": "Ultralytics/YOLO parity (data.yaml, detect+seg, splits, LabelsSet)", "labels": ["format", "parity"], "ref": "ultralytics: data.yaml + detection/segmentation + splits + LabelsSet", "target": "YOLOCodec.swift", "desc": "Swift is pose-only/single-class with the wrong config filename.", "accept": "data.yaml; detect+seg tasks; train/val splits; LabelsSet output.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E18", "title": "E18 — Dispatch / CLI / umbrella API", "milestone": "M7 — Format coverage & dispatch/CLI",
+      "labels": ["epic", "io-slp", "parity", "gui-readiness"],
+      "body": "Unified load/save dispatch returns Labels only; CLI has 3 of 18 sio commands; no public umbrella. See MEGA_PLAN.md §E18.",
+      "subissues": [
+        {"id": "E18.1", "title": "load_file/save_file return polymorphism (Labels|Video|Skeleton|LabelsSet)", "labels": ["io-slp", "gui-readiness"], "ref": "load_file returns Labels|Video; +Skeleton/LabelsSet", "target": "LabelsIO.swift", "desc": "A GUI Open accepts a dropped .mp4 / skeleton / dir uniformly.", "accept": "dispatch returns the right kind enum; .mp4 -> Video-backed empty Labels.", "cx": "M"},
+        {"id": "E18.2", "title": "FileFormat coverage + content-sniff alignment", "labels": ["io-slp", "format"], "ref": "FileFormat (+video/geojson/trackmate/ultralytics/skeleton); align JSON/HDF5 sniff", "target": "SleapIOError.swift (FileFormat), LabelsIO.swift", "desc": "Add cases + align AlphaTracker/analysis sniff heuristics with Python.", "accept": "sniff matches Python on sample files; new cases dispatch.", "cx": "S"},
+        {"id": "E18.3", "title": "load_video / load_skeleton / load_labels_set dispatch", "labels": ["io-slp", "format"], "ref": "load_video / load_skeleton / load_labels_set", "target": "LabelsIO.swift", "desc": "High-level entry points by extension/content.", "accept": "each loads the right type from a fixture.", "cx": "M"},
+        {"id": "E18.4", "title": "sio CLI commands (filenames/merge/split/embed/export/render/info)", "labels": ["parity"], "ref": "sio filenames/merge/split/unsplit/embed/unembed/export/render", "target": "SleapioCLI.swift", "desc": "Expand from 3 to the GUI-relevant subset (skip video-pipeline cmds -> E19.4).", "accept": "each command smoke-tested via CLITests.", "cx": "L"},
+        {"id": "E18.5", "title": "Umbrella public API (re-export façade)", "labels": ["gui-readiness", "documentation"], "ref": "sleap_io.__init__ flat namespace / JS index barrels", "target": "SleapIO (new façade) + docs", "desc": "Documented re-export surface so consumers import one façade, not 4 modules' internals.", "accept": "façade exposes load/save + model + matchers; documented public surface.", "cx": "M"}
+      ]
+    },
+    {
+      "id": "E19", "title": "E19 — Out-of-scope tracking", "milestone": "M8 — Deferred / out of scope",
+      "labels": ["epic", "documentation"],
+      "body": "Confirmed non-goals for an Apple-native port (no Swift ecosystem) or deferred. Tracked for visibility; not built now. See GAP_ANALYSIS.md §6.",
+      "subissues": [
+        {"id": "E19.1", "title": "NWB (annotations + predictions) — out of scope", "labels": ["wontfix", "format"], "ref": "load_nwb/save_nwb (pynwb/ndx-pose/ndx-multisubjects)", "target": "n/a", "desc": "No Swift ecosystem; matches CLAUDE.md Phase 5.", "accept": "documented rationale; revisit only if a Swift NWB reader appears.", "cx": "XL"},
+        {"id": "E19.2", "title": "LEAP .mat — out of scope", "labels": ["wontfix", "format"], "ref": "load_leap (pymatreader)", "target": "n/a", "desc": "MATLAB struct parsing; no Swift ecosystem.", "accept": "documented rationale.", "cx": "L"},
+        {"id": "E19.3", "title": "Remote / Google-Drive / streaming SLP loading — deferred", "labels": ["enhancement", "io-slp"], "ref": "io/_remote.py / io/_gdrive.py / streaming HDF5", "target": "future SleapHDF5 streaming + URLSession", "desc": "Feasible later via URLSession range requests + partial HDF5; not a GUI blocker.", "accept": "design note; deferred.", "cx": "XL"},
+        {"id": "E19.4", "title": "sio video-pipeline CLI (trim/reencode/transform/apply-crops) — deferred", "labels": ["enhancement"], "ref": "sio trim/reencode/transform/apply-crops", "target": "SleapioCLI + VideoWriter (E12.7)", "desc": "Needs the encode pipeline first.", "accept": "deferred until E12.7 lands.", "cx": "XL"}
+      ]
+    }
+  ]
+}
