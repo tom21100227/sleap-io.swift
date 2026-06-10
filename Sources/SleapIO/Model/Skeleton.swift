@@ -191,6 +191,51 @@ public final class Skeleton: Hashable, @unchecked Sendable {
         _nodeToIndex[ObjectIdentifier(node)]
     }
 
+    /// Whether a node with the given name exists. Mirrors Python `name in skeleton`.
+    public func contains(nodeNamed name: String) -> Bool {
+        _nameToNode[name] != nil
+    }
+
+    // MARK: - Derived accessors
+    //
+    // These mirror the read-only views Python `Skeleton` exposes and are used
+    // throughout rendering, matching, and tensor export. Edges/symmetries whose
+    // endpoints are not part of this skeleton are skipped rather than crashing.
+
+    /// Node names in order. Mirrors `Skeleton.node_names`.
+    public var nodeNames: [String] {
+        nodes.map(\.name)
+    }
+
+    /// Edges as `(sourceIndex, destinationIndex)` pairs. Mirrors `Skeleton.edge_inds`.
+    public var edgeInds: [(Int, Int)] {
+        edges.compactMap { edge in
+            guard let s = index(of: edge.source),
+                  let d = index(of: edge.destination) else { return nil }
+            return (s, d)
+        }
+    }
+
+    /// Edges as `(sourceName, destinationName)` pairs. Mirrors `Skeleton.edge_names`.
+    public var edgeNames: [(String, String)] {
+        edges.map { ($0.source.name, $0.destination.name) }
+    }
+
+    /// Symmetries as sorted `(indexA, indexB)` pairs. Mirrors `Skeleton.symmetry_inds`.
+    public var symmetryInds: [(Int, Int)] {
+        symmetries.compactMap { sym in
+            guard let a = index(of: sym.nodeA),
+                  let b = index(of: sym.nodeB) else { return nil }
+            return a <= b ? (a, b) : (b, a)
+        }
+    }
+
+    /// Symmetries as `(nameA, nameB)` pairs, ordered to match ``symmetryInds``.
+    /// Mirrors `Skeleton.symmetry_names`.
+    public var symmetryNames: [(String, String)] {
+        symmetryInds.map { (nodes[$0.0].name, nodes[$0.1].name) }
+    }
+
     // MARK: - Identity equality
 
     public static func == (lhs: Skeleton, rhs: Skeleton) -> Bool {
