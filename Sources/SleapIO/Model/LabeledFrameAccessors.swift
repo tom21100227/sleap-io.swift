@@ -1,17 +1,6 @@
 import Foundation
 
-// MARK: - Instance emptiness
-
-extension Instance {
-    /// Whether this instance has no visible points.
-    ///
-    /// Mirrors the upstream `Instance.is_empty` concept used by
-    /// `LabeledFrame.remove_empty_instances`: an instance is considered empty
-    /// when none of its points are marked visible.
-    public var isEmpty: Bool {
-        !points.visibility.contains(true)
-    }
-}
+// Note: `Instance.isEmpty` is provided by E2.2 (ModelNumpyAccessors.swift).
 
 // MARK: - LabeledFrame cleanup + classification helpers
 
