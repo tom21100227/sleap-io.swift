@@ -103,6 +103,7 @@ public final class Labels: @unchecked Sendable {
             throw SleapIOError.mutationWhileLazy("Cannot replace videos while lazy. Call materialize() first.")
         }
         _videos = videos
+        invalidateFrameLookup()
     }
 
     /// Replace the skeletons list. Throws `mutationWhileLazy` if `isLazy`.
@@ -174,6 +175,9 @@ public final class Labels: @unchecked Sendable {
         guard isLazy else { return }
         let allFrames = frameStore.allFrames()
         frameStore = EagerFrameStore(frames: allFrames)
+        // Frame order is preserved by allFrames(), but invalidate defensively so the
+        // index is rebuilt against the eager store.
+        invalidateFrameLookup()
     }
 
     // MARK: - Query
@@ -191,14 +195,54 @@ public final class Labels: @unchecked Sendable {
     }
 
     /// The labeled frame for a specific video and frame index, if it exists.
+    ///
+    /// Backed by a cached `(videoIndex, frameIndex) -> store position` index that is
+    /// built lazily on first use (via ``frameMetadata()``, so it does not materialize
+    /// lazy frames) and invalidated on structural mutation. This makes repeated
+    /// lookups O(1) instead of the previous O(n) linear scan.
     public func frame(for video: Video, at frameIndex: Int) -> LabeledFrame? {
-        for i in 0..<frameStore.count {
-            let f = frameStore.frame(at: i)
-            if f.video === video && f.frameIndex == frameIndex {
-                return f
-            }
+        guard let videoIdx = videoIndex(of: video) else {
+            return nil
         }
-        return nil
+        guard let position = frameLookup()[FrameKey(video: videoIdx, frame: frameIndex)] else {
+            return nil
+        }
+        return frameStore.frame(at: position)
+    }
+
+    /// Index of a video in the identity table by object identity, or `nil`.
+    private func videoIndex(of video: Video) -> Int? {
+        _videos.firstIndex { $0 === video }
+    }
+
+    // MARK: - Frame lookup index
+
+    private struct FrameKey: Hashable {
+        let video: Int
+        let frame: Int
+    }
+
+    /// Cached `(videoIndex, frameIndex) -> store position` map. Invalidated by
+    /// structural mutations (add/remove/merge/materialize/replace videos).
+    private var _frameLookupCache: [FrameKey: Int]?
+
+    private func frameLookup() -> [FrameKey: Int] {
+        if let cache = _frameLookupCache { return cache }
+        let meta = frameMetadata()
+        var map = [FrameKey: Int](minimumCapacity: meta.count)
+        for (position, m) in meta.enumerated() {
+            // First occurrence wins, matching the previous linear-scan semantics.
+            let key = FrameKey(video: m.videoIndex, frame: m.frameIndex)
+            if map[key] == nil { map[key] = position }
+        }
+        _frameLookupCache = map
+        return map
+    }
+
+    /// Invalidate the frame-lookup index. Call after any structural mutation that
+    /// changes the frame list or the video ordering.
+    private func invalidateFrameLookup() {
+        _frameLookupCache = nil
     }
 
     /// All instances across all frames that belong to a given track.
@@ -268,6 +312,7 @@ public final class Labels: @unchecked Sendable {
     public func addFrame(_ frame: LabeledFrame) throws {
         try requireMaterialized("add frame")
         eagerStore.frames.append(frame)
+        invalidateFrameLookup()
         // Register new identity objects
         if !_videos.contains(where: { $0 === frame.video }) {
             _videos.append(frame.video)
@@ -286,6 +331,7 @@ public final class Labels: @unchecked Sendable {
     public func removeFrame(_ frame: LabeledFrame) throws {
         try requireMaterialized("remove frame")
         eagerStore.frames.removeAll { $0 === frame }
+        invalidateFrameLookup()
     }
 
     /// Remove all predicted instances from all frames.
@@ -339,6 +385,9 @@ public final class Labels: @unchecked Sendable {
                 existing.merge(from: otherFrame, strategy: strategy)
             } else {
                 eagerStore.frames.append(otherFrame)
+                // Keep the lookup index consistent so a later iteration that targets
+                // the same (video, frameIndex) finds this newly appended frame.
+                invalidateFrameLookup()
             }
         }
     }
