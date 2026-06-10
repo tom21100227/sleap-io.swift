@@ -7,7 +7,10 @@ public class Instance: Hashable, @unchecked Sendable {
     public var points: PointsArray
 
     /// The skeleton defining the landmark topology.
-    public let skeleton: Skeleton
+    ///
+    /// Mutable to support `replaceSkeleton(_:nodeNamesMap:)`. When reassigning
+    /// directly, keep `points.skeleton` in sync (or prefer `replaceSkeleton`).
+    public var skeleton: Skeleton
 
     /// The track this instance belongs to, if any.
     public var track: Track?
