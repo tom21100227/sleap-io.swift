@@ -74,6 +74,7 @@ extension Labels {
 
         switch resolvedFormat {
         case .slp:
+            stampSleapIOVersion()
             try await SLPWriter.write(self, to: url.path)
         case .cocoJSON:
             try COCOCodec.write(self, to: url.path)
