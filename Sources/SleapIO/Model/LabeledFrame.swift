@@ -265,22 +265,6 @@ public final class LabeledFrame: Hashable, @unchecked Sendable {
         }
     }
 
-    /// Backward-compatible bridge for callers that predate the conflict-returning
-    /// cascade. Forwards to ``merge(from:strategy:instanceMatcher:)`` using the
-    /// default duplicate matcher.
-    ///
-    /// - Note: Temporary bridge so `Labels.merge`'s existing call site keeps
-    ///   compiling until it is rewritten to consume the returned conflicts
-    ///   (issue #40). The cascade does not throw in practice, so errors are
-    ///   ignored here.
-    @discardableResult
-    public func merge(
-        from other: LabeledFrame,
-        strategy: MergeStrategy = .auto
-    ) -> [ConflictResolution] {
-        (try? merge(from: other, strategy: strategy, instanceMatcher: .duplicate)) ?? []
-    }
-
     // MARK: - Identity equality
 
     public static func == (lhs: LabeledFrame, rhs: LabeledFrame) -> Bool {

@@ -270,3 +270,214 @@ final class LabeledFrameMergeTests: XCTestCase {
         XCTAssertEqual(base.userInstances.count, 2)
     }
 }
+
+/// Thread-safe collector for progress fractions reported during a merge.
+private final class ProgressCollector: @unchecked Sendable {
+    private(set) var values: [Double] = []
+    func record(_ value: Double) { values.append(value) }
+}
+
+/// ``Labels/merge`` result, matcher-driven dedup, and provenance-history tests.
+///
+/// Named to be exercised by `--filter LabelsMerge`.
+final class LabelsMergeResultTests: XCTestCase {
+    private func makeOverlappingProjects() -> (Labels, Labels, PredictedInstance) {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "body")])
+        let video = Video(filename: "merge.mp4")
+
+        let baseFrame = LabeledFrame(
+            video: video,
+            frameIndex: 3,
+            instances: [Instance.from(numpy: [[10, 10]], skeleton: skeleton)]
+        )
+        let incomingPrediction = PredictedInstance.from(
+            numpy: [[100, 100]], skeleton: skeleton, score: 0.9)
+        let incomingFrame = LabeledFrame(
+            video: video,
+            frameIndex: 3,
+            instances: [
+                Instance.from(numpy: [[10, 10]], skeleton: skeleton),
+                incomingPrediction,
+            ]
+        )
+        let base = Labels(
+            frameStore: EagerFrameStore(frames: [baseFrame]),
+            videos: [video], skeletons: [skeleton], tracks: [])
+        let other = Labels(
+            frameStore: EagerFrameStore(frames: [incomingFrame]),
+            videos: [video], skeletons: [skeleton], tracks: [])
+        return (base, other, incomingPrediction)
+    }
+
+    // MARK: - MergeResult counts
+
+    func testMergeReturnsResultWithCounts() throws {
+        let (base, other, _) = makeOverlappingProjects()
+
+        let result = try base.merge(from: other, strategy: .auto)
+
+        XCTAssertTrue(result.successful)
+        XCTAssertTrue(result.errors.isEmpty)
+        XCTAssertEqual(result.framesMerged, 1)
+        XCTAssertEqual(result.instancesAdded, 1)      // the non-duplicate prediction
+        XCTAssertEqual(result.instancesSkipped, 1)    // the duplicate user (kept original)
+        XCTAssertEqual(result.instancesUpdated, 0)
+        XCTAssertEqual(result.conflicts.count, 1)
+        XCTAssertEqual(result.conflicts[0].resolution, .keptOriginal)
+    }
+
+    func testMergeAddsNewFrameCountsAllInstances() throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "body")])
+        let video = Video(filename: "v.mp4")
+        let base = Labels(
+            frameStore: EagerFrameStore(frames: []),
+            videos: [video], skeletons: [skeleton], tracks: [])
+        let otherFrame = LabeledFrame(
+            video: video, frameIndex: 7,
+            instances: [
+                Instance.from(numpy: [[1, 1]], skeleton: skeleton),
+                Instance.from(numpy: [[2, 2]], skeleton: skeleton),
+            ])
+        let other = Labels(
+            frameStore: EagerFrameStore(frames: [otherFrame]),
+            videos: [video], skeletons: [skeleton], tracks: [])
+
+        let result = try base.merge(from: other)
+
+        XCTAssertEqual(result.framesMerged, 1)
+        XCTAssertEqual(result.instancesAdded, 2)
+        XCTAssertEqual(base.frameCount, 1)
+        let f = try XCTUnwrap(base.frame(for: video, at: 7))
+        XCTAssertEqual(f.instances.count, 2)
+    }
+
+    // MARK: - Matcher-driven dedup + remapping
+
+    func testMergeDedupsVideoWithSamePathAndRegistersFrameUnderLocalVideo() throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "body")])
+        let baseVideo = Video(filename: "shared.mp4")
+        let otherVideo = Video(filename: "shared.mp4")  // same path, different object
+        let base = Labels(
+            frameStore: EagerFrameStore(frames: []),
+            videos: [baseVideo], skeletons: [skeleton], tracks: [])
+        let otherFrame = LabeledFrame(
+            video: otherVideo, frameIndex: 5,
+            instances: [Instance.from(numpy: [[1, 1]], skeleton: skeleton)])
+        let other = Labels(
+            frameStore: EagerFrameStore(frames: [otherFrame]),
+            videos: [otherVideo], skeletons: [skeleton], tracks: [])
+
+        let result = try base.merge(from: other)
+
+        XCTAssertEqual(base.videos.count, 1)
+        XCTAssertTrue(base.videos[0] === baseVideo)
+        XCTAssertEqual(result.framesMerged, 1)
+        let f = try XCTUnwrap(base.frame(for: baseVideo, at: 5))
+        XCTAssertTrue(f.video === baseVideo)
+        XCTAssertEqual(f.instances.count, 1)
+    }
+
+    func testMergeAppendsUnmatchedVideo() throws {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "body")])
+        let baseVideo = Video(filename: "a.mp4")
+        let otherVideo = Video(filename: "b.mp4")
+        let base = Labels(
+            frameStore: EagerFrameStore(frames: []),
+            videos: [baseVideo], skeletons: [skeleton], tracks: [])
+        let otherFrame = LabeledFrame(
+            video: otherVideo, frameIndex: 0,
+            instances: [Instance.from(numpy: [[1, 1]], skeleton: skeleton)])
+        let other = Labels(
+            frameStore: EagerFrameStore(frames: [otherFrame]),
+            videos: [otherVideo], skeletons: [skeleton], tracks: [])
+
+        try base.merge(from: other)
+
+        XCTAssertEqual(base.videos.count, 2)
+    }
+
+    func testMergeRemapsInstanceSkeletonOntoMatchedLocal() throws {
+        let baseSkel = Skeleton(name: "A", nodes: [Node(name: "head"), Node(name: "tail")])
+        let otherSkel = Skeleton(name: "B", nodes: [Node(name: "head"), Node(name: "tail")])
+        let baseVideo = Video(filename: "v.mp4")
+        let otherVideo = Video(filename: "v.mp4")
+        let base = Labels(
+            frameStore: EagerFrameStore(frames: []),
+            videos: [baseVideo], skeletons: [baseSkel], tracks: [])
+        let inst = Instance.from(numpy: [[1, 1], [2, 2]], skeleton: otherSkel)
+        let otherFrame = LabeledFrame(
+            video: otherVideo, frameIndex: 0, instances: [inst])
+        let other = Labels(
+            frameStore: EagerFrameStore(frames: [otherFrame]),
+            videos: [otherVideo], skeletons: [otherSkel], tracks: [])
+
+        let result = try base.merge(from: other)
+
+        XCTAssertTrue(result.successful)
+        XCTAssertEqual(base.skeletons.count, 1)
+        XCTAssertTrue(base.skeletons[0] === baseSkel)
+        let f = try XCTUnwrap(base.frame(for: baseVideo, at: 0))
+        XCTAssertTrue(f.instances[0].skeleton === baseSkel)
+    }
+
+    func testMergeRemapsInstanceTrackOntoMatchedLocal() throws {
+        let skeleton = Skeleton(name: "A", nodes: [Node(name: "body")])
+        let baseTrack = Track(name: "1")
+        let otherTrack = Track(name: "1")
+        let baseVideo = Video(filename: "v.mp4")
+        let otherVideo = Video(filename: "v.mp4")
+        let base = Labels(
+            frameStore: EagerFrameStore(frames: []),
+            videos: [baseVideo], skeletons: [skeleton], tracks: [baseTrack])
+        let inst = Instance.from(numpy: [[1, 1]], skeleton: skeleton, track: otherTrack)
+        let otherFrame = LabeledFrame(
+            video: otherVideo, frameIndex: 0, instances: [inst])
+        let other = Labels(
+            frameStore: EagerFrameStore(frames: [otherFrame]),
+            videos: [otherVideo], skeletons: [skeleton], tracks: [otherTrack])
+
+        try base.merge(from: other)
+
+        XCTAssertEqual(base.tracks.count, 1)
+        XCTAssertTrue(base.tracks[0] === baseTrack)
+        let f = try XCTUnwrap(base.frame(for: baseVideo, at: 0))
+        XCTAssertTrue(f.instances[0].track === baseTrack)
+    }
+
+    // MARK: - Provenance history
+
+    func testMergeRecordsHistoryInProvenance() throws {
+        let (base, other, _) = makeOverlappingProjects()
+
+        try base.merge(from: other, strategy: .auto)
+
+        let history = try XCTUnwrap(base.provenance["merge_history"]?.arrayValue)
+        XCTAssertEqual(history.count, 1)
+        let record = try XCTUnwrap(history[0].objectValue)
+        XCTAssertEqual(record["strategy"]?.stringValue, "auto")
+        let sourceLabels = try XCTUnwrap(record["source_labels"]?.objectValue)
+        XCTAssertEqual(sourceLabels["n_frames"]?.intValue, 1)
+        XCTAssertEqual(sourceLabels["n_skeletons"]?.intValue, 1)
+        let resultRecord = try XCTUnwrap(record["result"]?.objectValue)
+        XCTAssertEqual(resultRecord["frames_merged"]?.intValue, 1)
+        XCTAssertEqual(resultRecord["instances_added"]?.intValue, 1)
+
+        // A second merge appends another record.
+        try base.merge(from: other, strategy: .keepBoth)
+        XCTAssertEqual(base.provenance["merge_history"]?.arrayValue?.count, 2)
+        let second = try XCTUnwrap(base.provenance["merge_history"]?.arrayValue?[1].objectValue)
+        XCTAssertEqual(second["strategy"]?.stringValue, "keep_both")
+    }
+
+    // MARK: - Progress
+
+    func testMergeReportsProgress() throws {
+        let (base, other, _) = makeOverlappingProjects()
+        let collector = ProgressCollector()
+
+        try base.merge(from: other, progress: { collector.record($0) })
+
+        XCTAssertFalse(collector.values.isEmpty)
+        XCTAssertEqual(collector.values.last, 1.0)
+    }
+}

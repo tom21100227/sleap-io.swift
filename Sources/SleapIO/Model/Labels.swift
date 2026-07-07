@@ -366,56 +366,223 @@ public final class Labels: @unchecked Sendable {
         _tracks.removeAll { $0 === track }
     }
 
-    /// Merge another Labels into this one.
+    /// Merge another `Labels` into this one, deduplicating the identity tables
+    /// with the supplied matchers and merging frames via the frame-level cascade.
+    ///
+    /// Mirrors the upstream `Labels.merge`. Incoming videos, skeletons, and tracks
+    /// are resolved against this collection using `matchVideos` / `matchSkeletons`
+    /// / `matchTracks`: a matched item is reused (and incoming instances/frames are
+    /// remapped onto it), while an unmatched item is appended. Frames that already
+    /// exist are merged with
+    /// ``LabeledFrame/merge(from:strategy:instanceMatcher:)`` (resolving duplicate
+    /// instances with `matchInstances`); frames that do not exist are added under
+    /// the matched video.
+    ///
+    /// `errorMode` governs the skeleton-mismatch validation carried over from the
+    /// earlier merge implementation: when this collection already has skeletons and
+    /// an incoming skeleton matches none of them, a
+    /// ``RecoverableSleapError/skeletonMismatch(expected:found:)`` is raised
+    /// (`.strict`), collected into ``MergeResult/errors`` (`.warn`), or dropped
+    /// (`.ignore`) before the unmatched skeleton is appended. Merging into a
+    /// collection that has no skeletons never reports a mismatch.
+    ///
+    /// A record describing the merge (source statistics, strategy, and result
+    /// counts) is appended to the `"merge_history"` array in ``provenance``.
+    ///
+    /// - Parameters:
+    ///   - other: The collection to merge into this one.
+    ///   - strategy: Per-frame conflict strategy. Defaults to ``FrameStrategy/auto``.
+    ///   - matchVideos: Matcher used to dedup videos. Defaults to `VideoMatcher()`.
+    ///   - matchSkeletons: Matcher used to dedup skeletons. Defaults to
+    ///     `SkeletonMatcher()`.
+    ///   - matchTracks: Matcher used to dedup tracks. Defaults to `TrackMatcher()`.
+    ///   - matchInstances: Matcher used to detect duplicate instances within a
+    ///     frame. Defaults to ``InstanceMatcher/duplicate``.
+    ///   - errorMode: How skeleton-mismatch validation errors are handled.
+    ///     Defaults to ``ErrorMode/ignore``.
+    ///   - progress: Optional progress reporter, invoked with the fraction of
+    ///     frames processed.
+    /// - Returns: A ``MergeResult`` summarizing the merge.
     @discardableResult
     public func merge(
         from other: Labels,
-        strategy: LabeledFrame.MergeStrategy = .auto,
-        errorMode: ErrorMode = .ignore
-    ) throws -> [SleapIOWarning] {
+        strategy: FrameStrategy = .auto,
+        matchVideos: VideoMatcher = VideoMatcher(),
+        matchSkeletons: SkeletonMatcher = SkeletonMatcher(),
+        matchTracks: TrackMatcher = TrackMatcher(),
+        matchInstances: InstanceMatcher = .duplicate,
+        errorMode: ErrorMode = .ignore,
+        progress: ProgressReporter? = nil
+    ) throws -> MergeResult {
         try requireMaterialized("merge")
 
+        var result = MergeResult(successful: true)
         var collector = ErrorCollector()
+
+        // Source statistics for the provenance record (self is the only object
+        // mutated below, so these stay valid throughout the merge).
+        let sourceStats: JSONValue = .object([
+            "n_frames": .int(other.frameCount),
+            "n_videos": .int(other.videos.count),
+            "n_skeletons": .int(other.skeletons.count),
+            "n_tracks": .int(other.tracks.count),
+        ])
+
+        // Skeletons: dedup via matcher, preserving the skeleton-mismatch validation.
+        // The empty-collection case never reports a mismatch (snapshot up front so
+        // skeletons appended during the loop don't retroactively enable it).
+        let selfHadSkeletons = !_skeletons.isEmpty
+        var skeletonMap: [ObjectIdentifier: Skeleton] = [:]
         for incoming in other.skeletons {
-            if !_skeletons.isEmpty && !_skeletons.contains(where: { $0.matches(incoming) }) {
-                let error = RecoverableSleapError.skeletonMismatch(
-                    expected: _skeletons.flatMap(\.nodeNames),
-                    found: incoming.nodeNames
-                )
-                try collector.handle(error, mode: errorMode)
-            }
-        }
-
-        // Merge identity tables
-        for video in other.videos {
-            if !_videos.contains(where: { $0 === video }) {
-                _videos.append(video)
-            }
-        }
-        for skeleton in other.skeletons {
-            if !_skeletons.contains(where: { $0 === skeleton }) {
-                _skeletons.append(skeleton)
-            }
-        }
-        for track in other.tracks {
-            if !_tracks.contains(where: { $0 === track }) {
-                _tracks.append(track)
-            }
-        }
-        // Merge frames
-        for i in 0..<other.frameStore.count {
-            let otherFrame = other.frameStore.frame(at: i)
-            if let existing = frame(for: otherFrame.video, at: otherFrame.frameIndex) {
-                existing.merge(from: otherFrame, strategy: strategy)
+            if let matched = _skeletons.first(where: { matchSkeletons.match($0, incoming) }) {
+                skeletonMap[ObjectIdentifier(incoming)] = matched
             } else {
-                eagerStore.frames.append(otherFrame)
-                // Keep the lookup index consistent so a later iteration that targets
-                // the same (video, frameIndex) finds this newly appended frame.
-                invalidateFrameLookup()
+                if selfHadSkeletons {
+                    try collector.handle(
+                        .skeletonMismatch(
+                            expected: _skeletons.flatMap(\.nodeNames),
+                            found: incoming.nodeNames),
+                        mode: errorMode)
+                }
+                _skeletons.append(incoming)
+                skeletonMap[ObjectIdentifier(incoming)] = incoming
             }
         }
 
-        return collector.errors
+        // Videos: dedup via matcher (reuse local match or append).
+        var videoMap: [ObjectIdentifier: Video] = [:]
+        for incoming in other.videos {
+            if let matched = matchVideos.firstMatch(for: incoming, in: _videos) {
+                videoMap[ObjectIdentifier(incoming)] = matched
+            } else {
+                _videos.append(incoming)
+                videoMap[ObjectIdentifier(incoming)] = incoming
+            }
+        }
+        // The video table (and thus video indexing) may have changed.
+        invalidateFrameLookup()
+
+        // Tracks: dedup via matcher.
+        var trackMap: [ObjectIdentifier: Track] = [:]
+        for incoming in other.tracks {
+            if let matched = _tracks.first(where: { matchTracks.match($0, incoming) }) {
+                trackMap[ObjectIdentifier(incoming)] = matched
+            } else {
+                _tracks.append(incoming)
+                trackMap[ObjectIdentifier(incoming)] = incoming
+            }
+        }
+
+        // Frames: merge into a matching local frame or add a remapped copy.
+        let totalFrames = other.frameStore.count
+        for i in 0..<totalFrames {
+            progress?(Double(i) / Double(totalFrames))
+            let otherFrame = other.frameStore.frame(at: i)
+            let mappedVideo = videoMap[ObjectIdentifier(otherFrame.video)] ?? otherFrame.video
+
+            if let existing = frame(for: mappedVideo, at: otherFrame.frameIndex) {
+                let nBefore = existing.instances.count
+                let conflicts = try existing.merge(
+                    from: otherFrame, strategy: strategy, instanceMatcher: matchInstances)
+                // Remap instances that originated from the incoming frame onto the
+                // matched local skeletons/tracks (no-op for already-local instances).
+                for inst in existing.instances {
+                    remapInstance(inst, skeletonMap: skeletonMap, trackMap: trackMap)
+                }
+                let nAfter = existing.instances.count
+                result.instancesAdded += Swift.max(0, nAfter - nBefore)
+                result.conflicts.append(contentsOf: conflicts)
+                for conflict in conflicts {
+                    switch conflict.resolution {
+                    case .keptOriginal: result.instancesSkipped += 1
+                    case .keptNew, .updatedTracks: result.instancesUpdated += 1
+                    default: break
+                    }
+                }
+                result.framesMerged += 1
+            } else {
+                // `LabeledFrame.video` is immutable, so a new frame is built under
+                // the matched video with instances remapped onto local objects.
+                let newFrame = LabeledFrame(
+                    video: mappedVideo,
+                    frameIndex: otherFrame.frameIndex,
+                    instances: otherFrame.instances,
+                    isNegative: otherFrame.isNegative)
+                for inst in newFrame.instances {
+                    remapInstance(inst, skeletonMap: skeletonMap, trackMap: trackMap)
+                }
+                result.instancesAdded += newFrame.instances.count
+                eagerStore.frames.append(newFrame)
+                // Keep the lookup index consistent so a later iteration targeting the
+                // same (video, frameIndex) finds this newly appended frame.
+                invalidateFrameLookup()
+                result.framesMerged += 1
+            }
+        }
+        if totalFrames > 0 { progress?(1.0) }
+
+        // Suggestions: carry over any not already present on the mapped video.
+        for suggestion in other.suggestions {
+            let mappedVideo = videoMap[ObjectIdentifier(suggestion.video)] ?? suggestion.video
+            let exists = suggestions.contains {
+                $0.video === mappedVideo && $0.frameIndex == suggestion.frameIndex
+            }
+            if !exists {
+                suggestions.append(
+                    SuggestionFrame(video: mappedVideo, frameIndex: suggestion.frameIndex))
+            }
+        }
+
+        result.errors = collector.errors
+        result.successful = collector.errors.isEmpty
+
+        // Record the merge in provenance history.
+        var history = provenance["merge_history"]?.arrayValue ?? []
+        history.append(.object([
+            "source_filename": other.provenance["filename"] ?? .null,
+            "target_filename": provenance["filename"] ?? .null,
+            "source_labels": sourceStats,
+            "strategy": .string(Labels.frameStrategyName(strategy)),
+            "result": .object([
+                "frames_merged": .int(result.framesMerged),
+                "instances_added": .int(result.instancesAdded),
+                "conflicts": .int(result.conflicts.count),
+            ]),
+        ]))
+        provenance["merge_history"] = .array(history)
+
+        return result
+    }
+
+    /// Remap an instance's skeleton and track references onto the matched local
+    /// objects, if the merge matchers deduped them to a different object.
+    private func remapInstance(
+        _ instance: Instance,
+        skeletonMap: [ObjectIdentifier: Skeleton],
+        trackMap: [ObjectIdentifier: Track]
+    ) {
+        if let mapped = skeletonMap[ObjectIdentifier(instance.skeleton)],
+           mapped !== instance.skeleton {
+            instance.replaceSkeleton(mapped)
+        }
+        if let track = instance.track,
+           let mapped = trackMap[ObjectIdentifier(track)],
+           mapped !== track {
+            instance.track = mapped
+        }
+    }
+
+    /// The upstream-style string identifier for a frame merge strategy, used in
+    /// the `provenance["merge_history"]` record.
+    private static func frameStrategyName(_ strategy: FrameStrategy) -> String {
+        switch strategy {
+        case .auto: return "auto"
+        case .keepOriginal: return "keep_original"
+        case .keepNew: return "keep_new"
+        case .keepBoth: return "keep_both"
+        case .updateTracks: return "update_tracks"
+        case .replacePredictions: return "replace_predictions"
+        }
     }
 
     // MARK: - Convenience

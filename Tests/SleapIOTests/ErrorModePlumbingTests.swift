@@ -44,15 +44,17 @@ final class ErrorModePlumbingTests: XCTestCase {
         XCTAssertEqual(base.frameCount, 0)
     }
 
-    func testWarnReturnsWarningsAndMerges() throws {
+    func testWarnCollectsErrorsAndMerges() throws {
         let local = skeleton("local", ["head", "thorax"])
         let incoming = skeleton("incoming", ["head", "abdomen"])
         let base = labels(skeletons: [local])
         let other = labels(skeletons: [incoming], frameSkeleton: incoming)
 
-        let warnings = try base.merge(from: other, errorMode: .warn)
+        let result = try base.merge(from: other, errorMode: .warn)
 
-        XCTAssertFalse(warnings.isEmpty)
+        XCTAssertFalse(result.errors.isEmpty)
+        XCTAssertFalse(result.successful)
+        // Incoming skeleton does not match local, so it is appended (not deduped).
         XCTAssertEqual(base.skeletons.count, 2)
         XCTAssertEqual(base.frameCount, 1)
     }
@@ -63,9 +65,10 @@ final class ErrorModePlumbingTests: XCTestCase {
         let base = labels(skeletons: [local])
         let other = labels(skeletons: [incoming], frameSkeleton: incoming)
 
-        let warnings = try base.merge(from: other)
+        let result = try base.merge(from: other)
 
-        XCTAssertEqual(warnings, [])
+        XCTAssertEqual(result.errors, [])
+        XCTAssertTrue(result.successful)
         XCTAssertEqual(base.skeletons.count, 2)
         XCTAssertEqual(base.frameCount, 1)
     }
@@ -75,24 +78,28 @@ final class ErrorModePlumbingTests: XCTestCase {
         let base = Labels()
         let other = labels(skeletons: [incoming], frameSkeleton: incoming)
 
-        let warnings = try base.merge(from: other, errorMode: .strict)
+        let result = try base.merge(from: other, errorMode: .strict)
 
-        XCTAssertEqual(warnings, [])
+        XCTAssertEqual(result.errors, [])
+        XCTAssertTrue(result.successful)
         XCTAssertEqual(base.skeletons.count, 1)
         XCTAssertEqual(base.frameCount, 1)
     }
 
-    func testCompatibleSkeletonsReturnNoWarningsInAllModes() throws {
+    func testCompatibleSkeletonsDedupAndReturnNoErrorsInAllModes() throws {
         for mode in [ErrorMode.strict, .warn, .ignore] {
             let local = skeleton("local", ["head", "thorax"])
             let incoming = skeleton("incoming", ["thorax", "head"])
             let base = labels(skeletons: [local])
             let other = labels(skeletons: [incoming], frameSkeleton: incoming)
 
-            let warnings = try base.merge(from: other, errorMode: mode)
+            let result = try base.merge(from: other, errorMode: mode)
 
-            XCTAssertEqual(warnings, [])
-            XCTAssertEqual(base.skeletons.count, 2)
+            XCTAssertEqual(result.errors, [])
+            XCTAssertTrue(result.successful)
+            // Matcher-driven dedup: incoming matches local structurally, so it is
+            // reused rather than appended.
+            XCTAssertEqual(base.skeletons.count, 1)
             XCTAssertEqual(base.frameCount, 1)
         }
     }
@@ -104,10 +111,12 @@ final class ErrorModePlumbingTests: XCTestCase {
         let base = labels(skeletons: [partialOverlap, exactMatch])
         let other = labels(skeletons: [incoming], frameSkeleton: incoming)
 
-        let warnings = try base.merge(from: other, errorMode: .strict)
+        let result = try base.merge(from: other, errorMode: .strict)
 
-        XCTAssertEqual(warnings, [])
-        XCTAssertEqual(base.skeletons.count, 3)
+        XCTAssertEqual(result.errors, [])
+        XCTAssertTrue(result.successful)
+        // Incoming matches the exact-match skeleton, so it is deduped onto it.
+        XCTAssertEqual(base.skeletons.count, 2)
         XCTAssertEqual(base.frameCount, 1)
     }
 }
