@@ -208,6 +208,7 @@ public final class Skeleton: Hashable, @unchecked Sendable {
     /// node order, so instances must be migrated to preserve alignment — pass every
     /// instance that uses this skeleton.
     public func reorderNodes(_ newOrder: [String], migratingInstances instances: [Instance]) throws {
+        let oldNodeCount = nodes.count
         guard newOrder.count == nodes.count, Set(newOrder) == Set(nodeNames) else {
             throw SleapIOError.invalidSkeleton("newOrder must be a permutation of the current node names")
         }
@@ -226,8 +227,13 @@ public final class Skeleton: Hashable, @unchecked Sendable {
 
         for instance in instances where instance.skeleton === self {
             if let predicted = instance as? PredictedInstance {
+                guard predicted.predictedPoints.count == oldNodeCount,
+                      predicted.predictedPoints.scores.count == oldNodeCount else {
+                    continue
+                }
                 predicted.predictedPoints = Self.permuted(predicted.predictedPoints, by: perm, skeleton: self)
             } else {
+                guard instance.points.count == oldNodeCount else { continue }
                 instance.points = Self.permuted(instance.points, by: perm, skeleton: self)
             }
         }

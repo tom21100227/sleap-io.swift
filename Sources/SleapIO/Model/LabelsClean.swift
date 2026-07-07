@@ -33,10 +33,10 @@ extension Labels {
     ///
     /// Lazy stores are materialized before mutation.
     public func clean(frames: Bool = true,
-                      instances: Bool = true,
+                      instances: Bool = false,
                       skeletons: Bool = true,
                       tracks: Bool = true,
-                      videos: Bool = true) throws {
+                      videos: Bool = false) throws {
         // This operation mutates the frame list, so it needs an eager store.
         materialize()
 
@@ -65,7 +65,26 @@ extension Labels {
             for frame in remainingFrames {
                 referenced.insert(ObjectIdentifier(frame.video))
             }
-            try setVideos(self.videos.filter { referenced.contains(ObjectIdentifier($0)) })
+            let oldVideos = self.videos
+            let newVideos = oldVideos.filter { referenced.contains(ObjectIdentifier($0)) }
+            let indexMap = Self.identityIndexMap(from: oldVideos, to: newVideos)
+
+            rois = rois.compactMap { roi in
+                var remapped = roi
+                guard Self.remapRequiredIndex(&remapped.videoIndex, using: indexMap) else {
+                    return nil
+                }
+                return remapped
+            }
+            masks = masks.compactMap { mask in
+                var remapped = mask
+                guard Self.remapRequiredIndex(&remapped.videoIndex, using: indexMap) else {
+                    return nil
+                }
+                return remapped
+            }
+
+            try setVideos(newVideos)
         }
 
         if skeletons {
@@ -87,7 +106,22 @@ extension Labels {
                     }
                 }
             }
-            try setTracks(self.tracks.filter { referenced.contains(ObjectIdentifier($0)) })
+            let oldTracks = self.tracks
+            let newTracks = oldTracks.filter { referenced.contains(ObjectIdentifier($0)) }
+            let indexMap = Self.identityIndexMap(from: oldTracks, to: newTracks)
+
+            rois = rois.map { roi in
+                var remapped = roi
+                Self.remapOptionalIndex(&remapped.trackIndex, using: indexMap)
+                return remapped
+            }
+            masks = masks.map { mask in
+                var remapped = mask
+                Self.remapOptionalIndex(&remapped.trackIndex, using: indexMap)
+                return remapped
+            }
+
+            try setTracks(newTracks)
         }
     }
 
@@ -98,7 +132,7 @@ extension Labels {
     ///   stripped.
     ///
     /// Lazy stores are materialized before mutation.
-    public func removePredictions(clean: Bool = false) throws {
+    public func removePredictions(clean: Bool = true) throws {
         materialize()
 
         for frame in frameStore.allFrames() {
@@ -120,5 +154,29 @@ extension Labels {
             )
         }
         eager.frames = frames
+    }
+
+    private static func identityIndexMap<T: AnyObject>(from oldItems: [T], to newItems: [T]) -> [Int: Int?] {
+        var newIndexByID: [ObjectIdentifier: Int] = [:]
+        for (newIndex, item) in newItems.enumerated() {
+            newIndexByID[ObjectIdentifier(item)] = newIndex
+        }
+        var map: [Int: Int?] = [:]
+        for (oldIndex, item) in oldItems.enumerated() {
+            map[oldIndex] = newIndexByID[ObjectIdentifier(item)]
+        }
+        return map
+    }
+
+    private static func remapRequiredIndex(_ index: inout Int?, using map: [Int: Int?]) -> Bool {
+        guard let oldIndex = index else { return true }
+        guard let mapped = map[oldIndex], let newIndex = mapped else { return false }
+        index = newIndex
+        return true
+    }
+
+    private static func remapOptionalIndex(_ index: inout Int?, using map: [Int: Int?]) {
+        guard let oldIndex = index else { return }
+        index = map[oldIndex] ?? nil
     }
 }

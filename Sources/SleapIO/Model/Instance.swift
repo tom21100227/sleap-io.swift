@@ -8,9 +8,8 @@ public class Instance: Hashable, @unchecked Sendable {
 
     /// The skeleton defining the landmark topology.
     ///
-    /// Mutable to support `replaceSkeleton(_:nodeNamesMap:)`. When reassigning
-    /// directly, keep `points.skeleton` in sync (or prefer `replaceSkeleton`).
-    public var skeleton: Skeleton
+    /// Mutate only via `replaceSkeleton` so `points.skeleton` stays in sync.
+    public internal(set) var skeleton: Skeleton
 
     /// The track this instance belongs to, if any.
     public var track: Track?

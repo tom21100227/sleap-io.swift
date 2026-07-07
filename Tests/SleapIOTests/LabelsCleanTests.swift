@@ -68,7 +68,7 @@ final class LabelsCleanTests: XCTestCase {
             tracks: []
         )
 
-        try labels.clean()
+        try labels.clean(instances: true)
 
         let frameIndices = labels.map { $0.frameIndex }.sorted()
         XCTAssertEqual(frameIndices, [0, 2])
@@ -99,7 +99,7 @@ final class LabelsCleanTests: XCTestCase {
             tracks: []
         )
 
-        try labels.clean()
+        try labels.clean(instances: true)
 
         let survivingFrame = try XCTUnwrap(labels.frame(for: video, at: 0))
         XCTAssertEqual(survivingFrame.instances.count, 1)
@@ -154,7 +154,7 @@ final class LabelsCleanTests: XCTestCase {
             tracks: [usedTrack, unusedTrack]
         )
 
-        try labels.clean()
+        try labels.clean(videos: true)
 
         XCTAssertEqual(labels.videos.count, 1)
         XCTAssertTrue(labels.videos[0] === usedVideo)
