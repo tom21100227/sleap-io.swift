@@ -15,19 +15,18 @@ let kMaxSupportedFormatVersion: Float = 2.4
 /// Reads SLEAP .slp files (HDF5-based).
 public struct SLPReader {
 
-    /// SLP datasets that format versions newer than 1.5 may contain and that
-    /// this reader does not model. When a 1.6-2.4 file is loaded these datasets
-    /// are skipped rather than causing a `formatVersionTooNew` failure: the
-    /// reader materializes only the datasets it models — frames, instances,
-    /// points, pred_points, videos and tracks. The ROI/segmentation-mask tables
-    /// are modeled for the 1.5 schema only and are likewise skipped for newer
-    /// versions (see ``modelsAnnotationTables(formatId:)``).
+    /// SLP datasets that this reader still does not model. When a 1.6-2.4 file is
+    /// loaded these datasets are skipped rather than causing a
+    /// `formatVersionTooNew` failure.
     ///
-    /// The reader never opens these dataset names, so they are skipped by
-    /// omission — no explicit branching is required. The list is retained for
+    /// The bounding-box (`bboxes`), centroid (`centroids`), identity
+    /// (`identities_json`), ROI (`rois`), and segmentation-mask (`masks`) tables
+    /// are now modeled and read best-effort. Only label images (epic E7 #47)
+    /// remain unmodeled: the reader never opens `label_images`, so it is skipped
+    /// by omission — no explicit branching is required. The list is retained for
     /// documentation and to anchor the version-support tests.
     static let unmodeledDatasetNames: [String] = [
-        "bboxes", "masks", "centroids", "identities", "label_images"
+        "label_images"
     ]
 
     /// Validate an SLP `format_id` against the supported range.
@@ -153,6 +152,14 @@ public struct SLPReader {
         // 14. Read masks
         let masks = try readMasks(from: file, formatId: formatId)
 
+        // 15. Read annotation datasets modeled independently of the ROI/mask
+        // tables: identities (/identities_json), bounding boxes (/bboxes), and
+        // centroids (/centroids). Each is gated on dataset presence and reads
+        // best-effort (see the individual methods).
+        let identities = readIdentities(from: file)
+        let bboxes = readBboxes(from: file)
+        let centroids = readCentroids(from: file)
+
         // Apply pre-1.1 coordinate adjustment
         if formatId < 1.1 {
             applyCoordinateAdjustment(frames: frames)
@@ -170,6 +177,9 @@ public struct SLPReader {
             rois: rois,
             masks: masks
         )
+        labels.identities = identities
+        labels.bboxes = bboxes
+        labels.centroids = centroids
         progress?(1.0)
         return labels
     }
@@ -693,6 +703,142 @@ public struct SLPReader {
             // 1.5 is fully modeled — surface real read errors. For 1.6+ the schema may be
             // extended/unknown; skip gracefully rather than failing the whole load.
             if SLPReader.modelsAnnotationTables(formatId: formatId) { throw error }
+            return []
+        }
+    }
+
+    // MARK: - Read identities
+
+    /// Read ground-truth ``Identity`` annotations from the `/identities_json`
+    /// dataset (one JSON blob per identity). Returns an empty array when the
+    /// dataset is absent or unreadable. Mirrors Python `read_identities`.
+    static func readIdentities(from file: HDF5File) -> [Identity] {
+        guard file.exists(name: "identities_json") else { return [] }
+        do {
+            let ds = try file.openDataset(name: "identities_json")
+            let strings = try ds.readVLenStrings()
+            var identities: [Identity] = []
+            identities.reserveCapacity(strings.count)
+            for str in strings {
+                guard let data = str.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data),
+                      let obj = json as? [String: Any] else { continue }
+                let name = (obj["name"] as? String) ?? ""
+                let color = obj["color"] as? String
+                var metadata: [String: JSONValue] = [:]
+                for (key, value) in obj where key != "name" && key != "color" {
+                    metadata[key] = JSONValue(jsonObject: value)
+                }
+                identities.append(Identity(name: name, color: color, metadata: metadata))
+            }
+            return identities
+        } catch {
+            return []
+        }
+    }
+
+    // MARK: - Read bounding boxes
+
+    /// Read ``BoundingBox`` annotations from the `/bboxes` compound dataset.
+    ///
+    /// Gated on dataset presence and read best-effort: `/bboxes` may be absent,
+    /// carry a schema this reader does not model, or (in synthetic fixtures)
+    /// contain unrelated data — any read failure yields an empty array rather
+    /// than failing the whole load. Indices (`video`/`frame_idx`/`track`/
+    /// `instance`) are stored raw; negative sentinels decode to `nil`.
+    static func readBboxes(from file: HDF5File) -> [BoundingBox] {
+        guard file.exists(name: "bboxes") else { return [] }
+        do {
+            let ds = try file.openDataset(name: "bboxes")
+            let count = ds.count
+            guard count > 0 else { return [] }
+
+            let xCenter = try ds.readCompoundFieldFloat64(fieldName: "x_center", count: count)
+            let yCenter = try ds.readCompoundFieldFloat64(fieldName: "y_center", count: count)
+            let width = try ds.readCompoundFieldFloat64(fieldName: "width", count: count)
+            let height = try ds.readCompoundFieldFloat64(fieldName: "height", count: count)
+            let angle = try ds.readCompoundFieldFloat64(fieldName: "angle", count: count)
+            let video = try ds.readCompoundFieldInt32(fieldName: "video", count: count)
+            let frameIdx = try ds.readCompoundFieldInt64(fieldName: "frame_idx", count: count)
+            let track = try ds.readCompoundFieldInt32(fieldName: "track", count: count)
+            let instance = try ds.readCompoundFieldInt32(fieldName: "instance", count: count)
+            let isPredicted = try ds.readCompoundFieldUInt8(fieldName: "is_predicted", count: count)
+            let score = try ds.readCompoundFieldFloat32(fieldName: "score", count: count)
+
+            let categories = try readJSONListAttribute(from: ds, name: "categories", count: count)
+            let names = try readJSONListAttribute(from: ds, name: "names", count: count)
+            let sources = try readJSONListAttribute(from: ds, name: "sources", count: count)
+
+            var boxes: [BoundingBox] = []
+            boxes.reserveCapacity(count)
+            for i in 0..<count {
+                let predicted = isPredicted[i] != 0
+                boxes.append(BoundingBox(
+                    xCenter: xCenter[i],
+                    yCenter: yCenter[i],
+                    width: width[i],
+                    height: height[i],
+                    angle: angle[i],
+                    isPredicted: predicted,
+                    score: predicted ? score[i] : nil,
+                    videoIndex: video[i] >= 0 ? Int(video[i]) : nil,
+                    frameIndex: frameIdx[i] >= 0 ? Int(frameIdx[i]) : nil,
+                    trackIndex: track[i] >= 0 ? Int(track[i]) : nil,
+                    instanceIndex: instance[i] >= 0 ? Int(instance[i]) : nil,
+                    category: categories[i].isEmpty ? nil : categories[i],
+                    name: names[i].isEmpty ? nil : names[i],
+                    source: sources[i].isEmpty ? nil : sources[i]))
+            }
+            return boxes
+        } catch {
+            return []
+        }
+    }
+
+    // MARK: - Read centroids
+
+    /// Read ``Centroid`` annotations from the `/centroids` compound dataset.
+    ///
+    /// Gated on dataset presence and read best-effort, mirroring ``readBboxes``.
+    static func readCentroids(from file: HDF5File) -> [Centroid] {
+        guard file.exists(name: "centroids") else { return [] }
+        do {
+            let ds = try file.openDataset(name: "centroids")
+            let count = ds.count
+            guard count > 0 else { return [] }
+
+            let x = try ds.readCompoundFieldFloat64(fieldName: "x", count: count)
+            let y = try ds.readCompoundFieldFloat64(fieldName: "y", count: count)
+            let video = try ds.readCompoundFieldInt32(fieldName: "video", count: count)
+            let frameIdx = try ds.readCompoundFieldInt64(fieldName: "frame_idx", count: count)
+            let track = try ds.readCompoundFieldInt32(fieldName: "track", count: count)
+            let instance = try ds.readCompoundFieldInt32(fieldName: "instance", count: count)
+            let isPredicted = try ds.readCompoundFieldUInt8(fieldName: "is_predicted", count: count)
+            let score = try ds.readCompoundFieldFloat32(fieldName: "score", count: count)
+
+            let categories = try readJSONListAttribute(from: ds, name: "categories", count: count)
+            let names = try readJSONListAttribute(from: ds, name: "names", count: count)
+            let sources = try readJSONListAttribute(from: ds, name: "sources", count: count)
+
+            var centroids: [Centroid] = []
+            centroids.reserveCapacity(count)
+            for i in 0..<count {
+                let predicted = isPredicted[i] != 0
+                centroids.append(Centroid(
+                    x: x[i],
+                    y: y[i],
+                    isPredicted: predicted,
+                    score: predicted ? score[i] : nil,
+                    videoIndex: video[i] >= 0 ? Int(video[i]) : nil,
+                    frameIndex: frameIdx[i] >= 0 ? Int(frameIdx[i]) : nil,
+                    trackIndex: track[i] >= 0 ? Int(track[i]) : nil,
+                    instanceIndex: instance[i] >= 0 ? Int(instance[i]) : nil,
+                    category: categories[i].isEmpty ? nil : categories[i],
+                    name: names[i].isEmpty ? nil : names[i],
+                    source: sources[i].isEmpty ? nil : sources[i]))
+            }
+            return centroids
+        } catch {
             return []
         }
     }

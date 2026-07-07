@@ -65,8 +65,8 @@ extension Video {
         Video(filename: filename, backendType: inferBackendType(filename))
     }
 
-    /// Infer a backend-type identifier ("media" / "hdf5" / "imageSequence") from a
-    /// file extension.
+    /// Infer a backend-type identifier ("media" / "hdf5" / "imageSequence" /
+    /// "tiff" / "seq") from a file extension.
     static func inferBackendType(_ filename: String) -> String {
         let ext = (filename as NSString).pathExtension.lowercased()
         switch ext {
@@ -74,7 +74,15 @@ extension Video {
             return "media"
         case "h5", "hdf5", "slp", "pkg":
             return "hdf5"
-        case "png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif":
+        case "tif", "tiff":
+            // A single (possibly multi-page) TIFF file maps to the multi-page
+            // TIFF stack backend. Directories of images are opened explicitly as
+            // "imageSequence" instead.
+            return "tiff"
+        case "seq":
+            // Norpix StreamPix .seq container.
+            return "seq"
+        case "png", "jpg", "jpeg", "bmp", "gif":
             return "imageSequence"
         default:
             return "media"

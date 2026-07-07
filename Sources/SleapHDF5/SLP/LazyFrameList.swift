@@ -177,6 +177,15 @@ extension SLPReader {
         let rois = try readROIsInternal(from: file, formatId: formatId)
         let masks = try readMasksInternal(from: file, formatId: formatId)
 
+        // Annotation datasets modeled independently of the ROI/mask tables:
+        // identities (/identities_json), bounding boxes (/bboxes), and centroids
+        // (/centroids). Each is gated on dataset presence and read best-effort
+        // (see the SLPReader methods). This mirrors the eager path in
+        // ``SLPReader/readFromFile`` so the default (lazy) load also populates them.
+        let identities = SLPReader.readIdentities(from: file)
+        let bboxes = SLPReader.readBboxes(from: file)
+        let centroids = SLPReader.readCentroids(from: file)
+
         return Labels(
             frameStore: frameList,
             videos: videos,
@@ -186,7 +195,10 @@ extension SLPReader {
             sessions: sessions,
             provenance: metadata.provenance,
             rois: rois,
-            masks: masks
+            masks: masks,
+            bboxes: bboxes,
+            centroids: centroids,
+            identities: identities
         )
     }
 

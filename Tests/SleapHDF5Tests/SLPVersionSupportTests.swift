@@ -67,9 +67,11 @@ final class SLPVersionSupportTests: XCTestCase {
     }
 
     func testUnmodeledDatasetNames_documentsSkippedDatasets() {
+        // bboxes/centroids/identities/masks are now modeled and read best-effort;
+        // only label images remain unmodeled (epic E7 #47).
         XCTAssertEqual(
             Set(SLPReader.unmodeledDatasetNames),
-            ["bboxes", "masks", "centroids", "identities", "label_images"]
+            ["label_images"]
         )
     }
 
@@ -168,6 +170,11 @@ final class SLPVersionSupportTests: XCTestCase {
         // Unmodeled ROI/mask tables must be skipped for newer versions.
         XCTAssertTrue(lazy.rois.isEmpty, "lazy rois skipped", file: file, line: line)
         XCTAssertTrue(lazy.masks.isEmpty, "lazy masks skipped", file: file, line: line)
+        // bboxes/centroids/identities are now read best-effort: the fixture's
+        // malformed datasets decode to [] (via catch) rather than failing the load.
+        XCTAssertTrue(lazy.bboxes.isEmpty, "lazy bboxes best-effort empty", file: file, line: line)
+        XCTAssertTrue(lazy.centroids.isEmpty, "lazy centroids best-effort empty", file: file, line: line)
+        XCTAssertTrue(lazy.identities.isEmpty, "lazy identities best-effort empty", file: file, line: line)
 
         // Eager path.
         let eager = try await Labels.loadEager(from: url)
@@ -183,6 +190,9 @@ final class SLPVersionSupportTests: XCTestCase {
         )
         XCTAssertTrue(eager.rois.isEmpty, "eager rois skipped", file: file, line: line)
         XCTAssertTrue(eager.masks.isEmpty, "eager masks skipped", file: file, line: line)
+        XCTAssertTrue(eager.bboxes.isEmpty, "eager bboxes best-effort empty", file: file, line: line)
+        XCTAssertTrue(eager.centroids.isEmpty, "eager centroids best-effort empty", file: file, line: line)
+        XCTAssertTrue(eager.identities.isEmpty, "eager identities best-effort empty", file: file, line: line)
     }
 
     /// Load a fixture at `formatId` carrying valid 1.5-schema `/rois` and
@@ -288,8 +298,10 @@ final class SLPVersionSupportTests: XCTestCase {
     /// Build a minimal but valid synthetic `.slp` file stamped with `formatId`.
     ///
     /// Contains the datasets the reader models — two videos and two frames (one
-    /// per video) — plus a set of unmodeled datasets (`bboxes`, `centroids`,
-    /// `identities`, `label_images`) that the reader never opens.
+    /// per video) — plus a set of extra datasets. `label_images` is still
+    /// unmodeled and never opened; the malformed `bboxes`/`centroids`/`identities`
+    /// datasets are now read best-effort and decode to [] (via catch) without
+    /// failing the load.
     ///
     /// Annotation tables are controlled by two flags:
     ///  - `includeBogusAnnotationTables`: writes deliberately malformed
@@ -356,8 +368,11 @@ final class SLPVersionSupportTests: XCTestCase {
             try frames.writeRaw(ptr.baseAddress!, memType: compType.id)
         }
 
-        // Unmodeled datasets the reader never opens — present to prove they are
-        // skipped by omission rather than triggering a load failure.
+        // Extra datasets. `label_images` is unmodeled and never opened. The
+        // malformed `bboxes`/`centroids` datasets are now read best-effort: the
+        // compound-field reads fail and are caught, yielding []. `identities` is a
+        // decoy — the reader looks for `identities_json`, so this name is ignored.
+        // All are present to prove they do not trigger a load failure.
         try file.writeVLenStringDataset(name: "bboxes", strings: ["unmodeled"])
         try file.writeVLenStringDataset(name: "centroids", strings: ["unmodeled"])
         try file.writeVLenStringDataset(name: "identities", strings: ["unmodeled"])

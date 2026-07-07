@@ -52,7 +52,23 @@ public struct SLPWriter {
     static func writeToFile(_ labels: Labels, file: HDF5File, progress: ProgressReporter? = nil) throws {
         let hasROIs = !labels.rois.isEmpty
         let hasMasks = !labels.masks.isEmpty
-        let formatId: Float = (hasROIs || hasMasks) ? 1.5 : 1.4
+        let hasBboxes = !labels.bboxes.isEmpty
+        let hasCentroids = !labels.centroids.isEmpty
+        let hasIdentities = !labels.identities.isEmpty
+
+        // Format-version stamping mirrors Python: /bboxes bumps to 1.7, /rois or
+        // /masks to 1.5, otherwise 1.4; identities (new in 1.9) bump to >= 1.9.
+        // Centroids have no Python analog; they are treated like /bboxes (>= 1.7).
+        var formatId: Float
+        if hasBboxes {
+            formatId = 1.7
+        } else if hasROIs || hasMasks {
+            formatId = 1.5
+        } else {
+            formatId = 1.4
+        }
+        if hasCentroids { formatId = max(formatId, 1.7) }
+        if hasIdentities { formatId = max(formatId, 1.9) }
 
         // 1. Write metadata
         try writeMetadata(labels, file: file, formatId: formatId)
@@ -84,6 +100,21 @@ public struct SLPWriter {
         // 9. Write masks
         if hasMasks {
             try writeMasks(labels.masks, file: file)
+        }
+
+        // 10. Write identities
+        if hasIdentities {
+            try writeIdentities(labels.identities, file: file)
+        }
+
+        // 11. Write bounding boxes
+        if hasBboxes {
+            try writeBboxes(labels.bboxes, file: file)
+        }
+
+        // 12. Write centroids
+        if hasCentroids {
+            try writeCentroids(labels.centroids, file: file)
         }
     }
 
@@ -711,6 +742,127 @@ public struct SLPWriter {
         try writeJSONListAttribute(to: ds, name: "categories", values: categories)
         try writeJSONListAttribute(to: ds, name: "names", values: names)
         try writeJSONListAttribute(to: ds, name: "sources", values: sources)
+    }
+
+    // MARK: - Write identities
+
+    /// Write ground-truth ``Identity`` annotations to `/identities_json` (one
+    /// JSON blob per identity). Mirrors Python `write_identities`.
+    private static func writeIdentities(_ identities: [Identity], file: HDF5File) throws {
+        guard !identities.isEmpty else { return }
+
+        var jsons: [String] = []
+        jsons.reserveCapacity(identities.count)
+        for identity in identities {
+            var dict: [String: Any] = ["name": identity.name]
+            if let color = identity.color {
+                dict["color"] = color
+            }
+            for (key, value) in identity.metadata {
+                dict[key] = value.jsonObject
+            }
+            let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
+            jsons.append(String(data: data, encoding: .utf8) ?? "{}")
+        }
+
+        try file.writeVLenStringDataset(name: "identities_json", strings: jsons)
+    }
+
+    // MARK: - Write bounding boxes
+
+    /// Write ``BoundingBox`` annotations to the `/bboxes` compound dataset.
+    /// String metadata (categories/names/sources) is stored as JSON-list
+    /// attributes, mirroring ``writeROIs`` / ``writeMasks``.
+    private static func writeBboxes(_ bboxes: [BoundingBox], file: HDF5File) throws {
+        guard !bboxes.isEmpty else { return }
+
+        let rowSize = 72
+        let compType = try HDF5Datatype.createCompound(size: rowSize)
+        try compType.insertField(name: "x_center", offset: 0, type: shim_H5T_NATIVE_DOUBLE())
+        try compType.insertField(name: "y_center", offset: 8, type: shim_H5T_NATIVE_DOUBLE())
+        try compType.insertField(name: "width", offset: 16, type: shim_H5T_NATIVE_DOUBLE())
+        try compType.insertField(name: "height", offset: 24, type: shim_H5T_NATIVE_DOUBLE())
+        try compType.insertField(name: "angle", offset: 32, type: shim_H5T_NATIVE_DOUBLE())
+        try compType.insertField(name: "video", offset: 40, type: shim_H5T_NATIVE_INT32())
+        try compType.insertField(name: "frame_idx", offset: 48, type: shim_H5T_NATIVE_INT64())
+        try compType.insertField(name: "track", offset: 56, type: shim_H5T_NATIVE_INT32())
+        try compType.insertField(name: "instance", offset: 60, type: shim_H5T_NATIVE_INT32())
+        try compType.insertField(name: "is_predicted", offset: 64, type: shim_H5T_NATIVE_UINT8())
+        try compType.insertField(name: "score", offset: 68, type: shim_H5T_NATIVE_FLOAT())
+
+        var buffer = Data(count: bboxes.count * rowSize)
+        buffer.withUnsafeMutableBytes { ptr in
+            let base = ptr.baseAddress!
+            for (i, box) in bboxes.enumerated() {
+                let p = base + i * rowSize
+                p.storeBytes(of: box.xCenter, toByteOffset: 0, as: Double.self)
+                p.storeBytes(of: box.yCenter, toByteOffset: 8, as: Double.self)
+                p.storeBytes(of: box.width, toByteOffset: 16, as: Double.self)
+                p.storeBytes(of: box.height, toByteOffset: 24, as: Double.self)
+                p.storeBytes(of: box.angle, toByteOffset: 32, as: Double.self)
+                p.storeBytes(of: Int32(box.videoIndex ?? -1), toByteOffset: 40, as: Int32.self)
+                p.storeBytes(of: Int64(box.frameIndex ?? -1), toByteOffset: 48, as: Int64.self)
+                p.storeBytes(of: Int32(box.trackIndex ?? -1), toByteOffset: 56, as: Int32.self)
+                p.storeBytes(of: Int32(box.instanceIndex ?? -1), toByteOffset: 60, as: Int32.self)
+                p.storeBytes(of: UInt8(box.isPredicted ? 1 : 0), toByteOffset: 64, as: UInt8.self)
+                p.storeBytes(of: box.score ?? Float.nan, toByteOffset: 68, as: Float.self)
+            }
+        }
+
+        let space = try HDF5Dataspace.create(dims: [bboxes.count])
+        let ds = try file.createDataset(name: "bboxes", type: compType, space: space)
+        try buffer.withUnsafeBytes { ptr in
+            try ds.writeRaw(ptr.baseAddress!, memType: compType.id)
+        }
+
+        try writeJSONListAttribute(to: ds, name: "categories", values: bboxes.map { $0.category ?? "" })
+        try writeJSONListAttribute(to: ds, name: "names", values: bboxes.map { $0.name ?? "" })
+        try writeJSONListAttribute(to: ds, name: "sources", values: bboxes.map { $0.source ?? "" })
+    }
+
+    // MARK: - Write centroids
+
+    /// Write ``Centroid`` annotations to the `/centroids` compound dataset,
+    /// following the `/bboxes` layout.
+    private static func writeCentroids(_ centroids: [Centroid], file: HDF5File) throws {
+        guard !centroids.isEmpty else { return }
+
+        let rowSize = 48
+        let compType = try HDF5Datatype.createCompound(size: rowSize)
+        try compType.insertField(name: "x", offset: 0, type: shim_H5T_NATIVE_DOUBLE())
+        try compType.insertField(name: "y", offset: 8, type: shim_H5T_NATIVE_DOUBLE())
+        try compType.insertField(name: "video", offset: 16, type: shim_H5T_NATIVE_INT32())
+        try compType.insertField(name: "frame_idx", offset: 24, type: shim_H5T_NATIVE_INT64())
+        try compType.insertField(name: "track", offset: 32, type: shim_H5T_NATIVE_INT32())
+        try compType.insertField(name: "instance", offset: 36, type: shim_H5T_NATIVE_INT32())
+        try compType.insertField(name: "is_predicted", offset: 40, type: shim_H5T_NATIVE_UINT8())
+        try compType.insertField(name: "score", offset: 44, type: shim_H5T_NATIVE_FLOAT())
+
+        var buffer = Data(count: centroids.count * rowSize)
+        buffer.withUnsafeMutableBytes { ptr in
+            let base = ptr.baseAddress!
+            for (i, c) in centroids.enumerated() {
+                let p = base + i * rowSize
+                p.storeBytes(of: c.x, toByteOffset: 0, as: Double.self)
+                p.storeBytes(of: c.y, toByteOffset: 8, as: Double.self)
+                p.storeBytes(of: Int32(c.videoIndex ?? -1), toByteOffset: 16, as: Int32.self)
+                p.storeBytes(of: Int64(c.frameIndex ?? -1), toByteOffset: 24, as: Int64.self)
+                p.storeBytes(of: Int32(c.trackIndex ?? -1), toByteOffset: 32, as: Int32.self)
+                p.storeBytes(of: Int32(c.instanceIndex ?? -1), toByteOffset: 36, as: Int32.self)
+                p.storeBytes(of: UInt8(c.isPredicted ? 1 : 0), toByteOffset: 40, as: UInt8.self)
+                p.storeBytes(of: c.score ?? Float.nan, toByteOffset: 44, as: Float.self)
+            }
+        }
+
+        let space = try HDF5Dataspace.create(dims: [centroids.count])
+        let ds = try file.createDataset(name: "centroids", type: compType, space: space)
+        try buffer.withUnsafeBytes { ptr in
+            try ds.writeRaw(ptr.baseAddress!, memType: compType.id)
+        }
+
+        try writeJSONListAttribute(to: ds, name: "categories", values: centroids.map { $0.category ?? "" })
+        try writeJSONListAttribute(to: ds, name: "names", values: centroids.map { $0.name ?? "" })
+        try writeJSONListAttribute(to: ds, name: "sources", values: centroids.map { $0.source ?? "" })
     }
 
     // MARK: - Helpers

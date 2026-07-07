@@ -158,9 +158,12 @@ extension Labels {
             return RecordingSession(cameraToVideo: remapped)
         }
 
-        // ROIs and masks are value structs; copy by value.
+        // ROIs, masks, bboxes, centroids, and identities are value structs; copy by value.
         let clonedROIs = rois
         let clonedMasks = masks
+        let clonedBboxes = bboxes
+        let clonedCentroids = centroids
+        let clonedIdentities = identities
         let clonedProvenance = provenance
 
         let store = EagerFrameStore(frames: clonedFrames)
@@ -181,7 +184,10 @@ extension Labels {
             sessions: clonedSessions,
             provenance: clonedProvenance,
             rois: clonedROIs,
-            masks: clonedMasks
+            masks: clonedMasks,
+            bboxes: clonedBboxes,
+            centroids: clonedCentroids,
+            identities: clonedIdentities
         )
     }
 

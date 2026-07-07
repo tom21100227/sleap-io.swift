@@ -136,6 +136,12 @@ public final class Labels: @unchecked Sendable {
     public var provenance: [String: JSONValue]
     public var rois: [ROI]
     public var masks: [SegmentationMask]
+    /// Bounding-box annotations for the dataset. Mirrors ``rois`` / ``masks``.
+    public var bboxes: [BoundingBox]
+    /// Centroid annotations for the dataset. Mirrors ``rois`` / ``masks``.
+    public var centroids: [Centroid]
+    /// Ground-truth identity annotations for the dataset. Mirrors ``rois`` / ``masks``.
+    public var identities: [Identity]
 
     // MARK: - Init
 
@@ -149,6 +155,9 @@ public final class Labels: @unchecked Sendable {
         self.provenance = [:]
         self.rois = []
         self.masks = []
+        self.bboxes = []
+        self.centroids = []
+        self.identities = []
     }
 
     /// Internal initializer used by readers.
@@ -160,7 +169,10 @@ public final class Labels: @unchecked Sendable {
                 sessions: [RecordingSession] = [],
                 provenance: [String: JSONValue] = [:],
                 rois: [ROI] = [],
-                masks: [SegmentationMask] = []) {
+                masks: [SegmentationMask] = [],
+                bboxes: [BoundingBox] = [],
+                centroids: [Centroid] = [],
+                identities: [Identity] = []) {
         self.frameStore = frameStore
         self._videos = videos
         self._skeletons = skeletons
@@ -170,6 +182,9 @@ public final class Labels: @unchecked Sendable {
         self.provenance = provenance
         self.rois = rois
         self.masks = masks
+        self.bboxes = bboxes
+        self.centroids = centroids
+        self.identities = identities
     }
 
     // MARK: - Lazy loading

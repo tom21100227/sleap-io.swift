@@ -85,6 +85,8 @@ extension Video {
     ///
     /// - "media", "MediaVideo": AVFoundation backend for video files
     /// - "imageSequence", "ImageVideo": Image directory backend
+    /// - "tiff", "TiffVideo": Multi-page TIFF stack backend
+    /// - "seq", "SeqVideo": Norpix StreamPix .seq backend
     /// - "hdf5", "HDF5Video": Embedded HDF5 video (requires loading through Labels.load)
     public func open() async throws {
         if let opener = backendOpener {
@@ -98,6 +100,12 @@ extension Video {
             case "imageSequence", "ImageVideo":
                 let url = URL(fileURLWithPath: filename)
                 backend = try ImageSequenceBackend(directory: url)
+            case "tiff", "TiffVideo":
+                let url = URL(fileURLWithPath: filename)
+                backend = try TiffVideo(url: url)
+            case "seq", "SeqVideo":
+                let url = URL(fileURLWithPath: filename)
+                backend = try SeqVideo(url: url)
             case "hdf5", "HDF5Video":
                 throw SleapIOError.videoError(
                     "HDF5 video backend requires loading through Labels.load(from:). " +
