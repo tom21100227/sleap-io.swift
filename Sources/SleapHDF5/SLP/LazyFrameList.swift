@@ -129,9 +129,9 @@ extension SLPReader {
         let metadataGroup = try file.openGroup(name: "metadata")
         let formatId = try metadataGroup.readFloatAttribute(name: "format_id")
 
-        if formatId > kMaxSupportedFormatVersion {
-            throw SleapIOError.formatVersionTooNew(formatId)
-        }
+        // Reject only versions strictly newer than the supported cap. Versions
+        // 1.6-2.4 load on a best-effort basis, skipping unmodeled datasets.
+        try validateFormatVersion(formatId)
 
         let jsonStr = try metadataGroup.readStringAttribute(name: "json")
         let metadata = try SLPMetadata.parse(json: jsonStr, formatId: formatId)

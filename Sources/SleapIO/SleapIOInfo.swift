@@ -9,10 +9,14 @@ public enum SleapIOInfo {
     /// The sleap-io.swift library version.
     public static let version = "0.3.0"
 
-    /// The SLP format versions this build can read/write.
-    ///
-    /// - Note: Extending the upper bound is tracked by epic E7 (read SLP ≥ 1.6).
+    /// SLP format versions this build reads AND writes at full fidelity.
     public static let supportedSLPFormatVersions: ClosedRange<Double> = 1.0...1.5
+
+    /// SLP format versions this build can READ. 1.6...2.4 are best-effort: modeled
+    /// data (frames/instances/points/videos/tracks/rois/masks) is read and
+    /// not-yet-modeled datasets are skipped. Writes still target
+    /// ``supportedSLPFormatVersions``. Kept in sync with the reader's cap.
+    public static let readableSLPFormatVersions: ClosedRange<Double> = 1.0...2.4
 
     /// The provenance key under which the library stamps its version on save.
     public static let provenanceVersionKey = "sleap_io_swift_version"
@@ -28,7 +32,7 @@ extension Labels {
     @discardableResult
     public func stampSleapIOVersion() -> String {
         let version = SleapIOInfo.version
-        provenance[SleapIOInfo.provenanceVersionKey] = version
+        provenance[SleapIOInfo.provenanceVersionKey] = .string(version)
         return version
     }
 }

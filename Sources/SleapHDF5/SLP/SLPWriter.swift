@@ -96,7 +96,9 @@ public struct SLPWriter {
         // Build metadata JSON with skeletons and provenance
         var metaDict: [String: Any] = [:]
         metaDict["version"] = "2.0.0"
-        metaDict["provenance"] = labels.provenance
+        // Bridge JSONValue provenance to Foundation objects so JSONSerialization can
+        // emit arbitrary JSON (numbers, booleans, nested containers) intact.
+        metaDict["provenance"] = labels.provenance.mapValues { $0.jsonObject }
 
         // Encode skeletons
         var skelList: [[String: Any]] = []

@@ -3,10 +3,59 @@ import CHDF5
 import SleapIO
 
 /// Maximum supported SLP format version.
-let kMaxSupportedFormatVersion: Float = 1.5
+///
+/// Files at or below this version load successfully. Versions 1.6-2.4 are read
+/// on a best-effort basis: the reader materializes the datasets it models
+/// (frames, instances, points, pred_points, videos and tracks) and silently
+/// skips any datasets it does not model (see ``SLPReader/unmodeledDatasetNames``)
+/// rather than rejecting the file. Only versions *strictly greater* than this
+/// cap are rejected with ``SleapIOError/formatVersionTooNew``.
+let kMaxSupportedFormatVersion: Float = 2.4
 
 /// Reads SLEAP .slp files (HDF5-based).
 public struct SLPReader {
+
+    /// SLP datasets that format versions newer than 1.5 may contain and that
+    /// this reader does not model. When a 1.6-2.4 file is loaded these datasets
+    /// are skipped rather than causing a `formatVersionTooNew` failure: the
+    /// reader materializes only the datasets it models — frames, instances,
+    /// points, pred_points, videos and tracks. The ROI/segmentation-mask tables
+    /// are modeled for the 1.5 schema only and are likewise skipped for newer
+    /// versions (see ``modelsAnnotationTables(formatId:)``).
+    ///
+    /// The reader never opens these dataset names, so they are skipped by
+    /// omission — no explicit branching is required. The list is retained for
+    /// documentation and to anchor the version-support tests.
+    static let unmodeledDatasetNames: [String] = [
+        "bboxes", "masks", "centroids", "identities", "label_images"
+    ]
+
+    /// Validate an SLP `format_id` against the supported range.
+    ///
+    /// Versions at or below ``kMaxSupportedFormatVersion`` load successfully;
+    /// versions 1.6-2.4 are read on a best-effort basis (see
+    /// ``unmodeledDatasetNames``). Only versions *strictly greater* than the cap
+    /// are rejected. Behavior for versions <= 1.5 is unchanged.
+    ///
+    /// - Throws: ``SleapIOError/formatVersionTooNew`` when `formatId` exceeds
+    ///   ``kMaxSupportedFormatVersion``.
+    static func validateFormatVersion(_ formatId: Float) throws {
+        if formatId > kMaxSupportedFormatVersion {
+            throw SleapIOError.formatVersionTooNew(formatId)
+        }
+    }
+
+    /// Whether this reader models the ROI/segmentation-mask tables for a given
+    /// format version.
+    ///
+    /// The `rois`/`masks` HDF5 tables are modeled for the 1.5 schema only.
+    /// Newer versions (1.6-2.4) may store these annotations under a different
+    /// schema this reader does not understand, so the tables are skipped there
+    /// (they count among the unmodeled datasets). Versions before 1.5 predate
+    /// the tables entirely.
+    static func modelsAnnotationTables(formatId: Float) -> Bool {
+        formatId >= 1.5 && formatId < 1.6
+    }
 
     /// Read an SLP file and return a Labels object.
     /// This is the eager path — all frames are fully materialized.
@@ -29,9 +78,9 @@ public struct SLPReader {
         let metadataGroup = try file.openGroup(name: "metadata")
         let formatId = try metadataGroup.readFloatAttribute(name: "format_id")
 
-        if formatId > kMaxSupportedFormatVersion {
-            throw SleapIOError.formatVersionTooNew(formatId)
-        }
+        // Reject only versions strictly newer than the supported cap. Versions
+        // 1.6-2.4 load on a best-effort basis, skipping unmodeled datasets.
+        try validateFormatVersion(formatId)
 
         let jsonStr = try metadataGroup.readStringAttribute(name: "json")
         let metadata = try SLPMetadata.parse(json: jsonStr, formatId: formatId)
@@ -519,114 +568,133 @@ public struct SLPReader {
     // MARK: - Read ROIs
 
     static func readROIs(from file: HDF5File, formatId: Float) throws -> [ROI] {
-        guard formatId >= 1.5 && file.exists(name: "rois") else { return [] }
+        // Gate on dataset presence, not format version: Python writes /rois ungated
+        // and its dtype is a superset of the fields we read by name, so 1.6-2.4 files
+        // carrying ROIs must not be silently dropped. (1.5 behavior unchanged.)
+        guard file.exists(name: "rois") else { return [] }
 
-        let ds = try file.openDataset(name: "rois")
-        let count = ds.count
-        guard count > 0 else { return [] }
+        do {
+            let ds = try file.openDataset(name: "rois")
+            let count = ds.count
+            guard count > 0 else { return [] }
 
-        let annotationType = try ds.readCompoundFieldUInt8(fieldName: "annotation_type", count: count)
-        let video = try ds.readCompoundFieldInt32(fieldName: "video", count: count)
-        let frameIdx = try ds.readCompoundFieldInt64(fieldName: "frame_idx", count: count)
-        let track = try ds.readCompoundFieldInt32(fieldName: "track", count: count)
-        let score = try ds.readCompoundFieldFloat32(fieldName: "score", count: count)
-        let wkbStart = try ds.readCompoundFieldUInt64(fieldName: "wkb_start", count: count)
-        let wkbEnd = try ds.readCompoundFieldUInt64(fieldName: "wkb_end", count: count)
+            let annotationType = try ds.readCompoundFieldUInt8(fieldName: "annotation_type", count: count)
+            let video = try ds.readCompoundFieldInt32(fieldName: "video", count: count)
+            let frameIdx = try ds.readCompoundFieldInt64(fieldName: "frame_idx", count: count)
+            let track = try ds.readCompoundFieldInt32(fieldName: "track", count: count)
+            let score = try ds.readCompoundFieldFloat32(fieldName: "score", count: count)
+            let wkbStart = try ds.readCompoundFieldUInt64(fieldName: "wkb_start", count: count)
+            let wkbEnd = try ds.readCompoundFieldUInt64(fieldName: "wkb_end", count: count)
 
-        // Read ROI metadata attributes
-        let categories = try readJSONListAttribute(from: ds, name: "categories", count: count)
-        let names = try readJSONListAttribute(from: ds, name: "names", count: count)
-        let sources = try readJSONListAttribute(from: ds, name: "sources", count: count)
+            // Read ROI metadata attributes
+            let categories = try readJSONListAttribute(from: ds, name: "categories", count: count)
+            let names = try readJSONListAttribute(from: ds, name: "names", count: count)
+            let sources = try readJSONListAttribute(from: ds, name: "sources", count: count)
 
-        // Read WKB geometry
-        let wkbData: [UInt8]
-        if file.exists(name: "roi_wkb") {
-            let wkbDs = try file.openDataset(name: "roi_wkb")
-            wkbData = try wkbDs.readUInt8()
-        } else {
-            wkbData = []
+            // Read WKB geometry
+            let wkbData: [UInt8]
+            if file.exists(name: "roi_wkb") {
+                let wkbDs = try file.openDataset(name: "roi_wkb")
+                wkbData = try wkbDs.readUInt8()
+            } else {
+                wkbData = []
+            }
+
+            var rois: [ROI] = []
+            for i in 0..<count {
+                let atypeRaw = annotationType[i]
+                let atype = decodeAnnotationType(atypeRaw)
+
+                let start = Int(wkbStart[i])
+                let end = Int(wkbEnd[i])
+                let points = parseWKBGeometry(Array(wkbData[start..<min(end, wkbData.count)]))
+
+                var roi = ROI(annotationType: atype, name: names[i], points: points)
+                roi.category = categories[i].isEmpty ? nil : categories[i]
+                roi.score = score[i]
+                roi.source = sources[i].isEmpty ? nil : sources[i]
+                roi.videoIndex = Int(video[i])
+                roi.frameIndex = Int(frameIdx[i])
+                roi.trackIndex = track[i] >= 0 ? Int(track[i]) : nil
+                rois.append(roi)
+            }
+
+            return rois
+        } catch {
+            // 1.5 is fully modeled — surface real read errors. For 1.6+ the schema may be
+            // extended/unknown; skip gracefully rather than failing the whole load.
+            if SLPReader.modelsAnnotationTables(formatId: formatId) { throw error }
+            return []
         }
-
-        var rois: [ROI] = []
-        for i in 0..<count {
-            let atypeRaw = annotationType[i]
-            let atype = decodeAnnotationType(atypeRaw)
-
-            let start = Int(wkbStart[i])
-            let end = Int(wkbEnd[i])
-            let points = parseWKBGeometry(Array(wkbData[start..<min(end, wkbData.count)]))
-
-            var roi = ROI(annotationType: atype, name: names[i], points: points)
-            roi.category = categories[i].isEmpty ? nil : categories[i]
-            roi.score = score[i]
-            roi.source = sources[i].isEmpty ? nil : sources[i]
-            roi.videoIndex = Int(video[i])
-            roi.frameIndex = Int(frameIdx[i])
-            roi.trackIndex = track[i] >= 0 ? Int(track[i]) : nil
-            rois.append(roi)
-        }
-
-        return rois
     }
 
     // MARK: - Read masks
 
     static func readMasks(from file: HDF5File, formatId: Float) throws -> [SegmentationMask] {
-        guard formatId >= 1.5 && file.exists(name: "masks") else { return [] }
+        // Gate on dataset presence, not format version (see readROIs): 1.6-2.4 files
+        // carrying /masks must not be silently dropped.
+        guard file.exists(name: "masks") else { return [] }
 
-        let ds = try file.openDataset(name: "masks")
-        let count = ds.count
-        guard count > 0 else { return [] }
+        do {
+            let ds = try file.openDataset(name: "masks")
+            let count = ds.count
+            guard count > 0 else { return [] }
 
-        let height = try ds.readCompoundFieldUInt32(fieldName: "height", count: count)
-        let width = try ds.readCompoundFieldUInt32(fieldName: "width", count: count)
-        let annotationType = try ds.readCompoundFieldUInt8(fieldName: "annotation_type", count: count)
-        let video = try ds.readCompoundFieldInt32(fieldName: "video", count: count)
-        let frameIdx = try ds.readCompoundFieldInt64(fieldName: "frame_idx", count: count)
-        let track = try ds.readCompoundFieldInt32(fieldName: "track", count: count)
-        let score = try ds.readCompoundFieldFloat32(fieldName: "score", count: count)
-        let rleStart = try ds.readCompoundFieldUInt64(fieldName: "rle_start", count: count)
-        let rleEnd = try ds.readCompoundFieldUInt64(fieldName: "rle_end", count: count)
+            let height = try ds.readCompoundFieldUInt32(fieldName: "height", count: count)
+            let width = try ds.readCompoundFieldUInt32(fieldName: "width", count: count)
+            let annotationType = try ds.readCompoundFieldUInt8(fieldName: "annotation_type", count: count)
+            let video = try ds.readCompoundFieldInt32(fieldName: "video", count: count)
+            let frameIdx = try ds.readCompoundFieldInt64(fieldName: "frame_idx", count: count)
+            let track = try ds.readCompoundFieldInt32(fieldName: "track", count: count)
+            let score = try ds.readCompoundFieldFloat32(fieldName: "score", count: count)
+            let rleStart = try ds.readCompoundFieldUInt64(fieldName: "rle_start", count: count)
+            let rleEnd = try ds.readCompoundFieldUInt64(fieldName: "rle_end", count: count)
 
-        let names = try readJSONListAttribute(from: ds, name: "names", count: count)
-        let categories = try readJSONListAttribute(from: ds, name: "categories", count: count)
-        let sources = try readJSONListAttribute(from: ds, name: "sources", count: count)
+            let names = try readJSONListAttribute(from: ds, name: "names", count: count)
+            let categories = try readJSONListAttribute(from: ds, name: "categories", count: count)
+            let sources = try readJSONListAttribute(from: ds, name: "sources", count: count)
 
-        // Read RLE data
-        let rleData: [UInt8]
-        if file.exists(name: "mask_rle") {
-            let rleDs = try file.openDataset(name: "mask_rle")
-            rleData = try rleDs.readUInt8()
-        } else {
-            rleData = []
+            // Read RLE data
+            let rleData: [UInt8]
+            if file.exists(name: "mask_rle") {
+                let rleDs = try file.openDataset(name: "mask_rle")
+                rleData = try rleDs.readUInt8()
+            } else {
+                rleData = []
+            }
+
+            var masks: [SegmentationMask] = []
+            for i in 0..<count {
+                let start = Int(rleStart[i])
+                let end = Int(rleEnd[i])
+                let rleBytes = Array(rleData[start..<min(end, rleData.count)])
+
+                // Decode uint32 RLE counts from packed bytes
+                let rleCounts = decodeRLECounts(from: rleBytes)
+
+                var mask = SegmentationMask(
+                    rleCounts: rleCounts,
+                    height: Int(height[i]),
+                    width: Int(width[i]),
+                    name: names[i]
+                )
+                mask.annotationType = decodeAnnotationType(annotationType[i])
+                mask.category = categories[i].isEmpty ? nil : categories[i]
+                mask.score = score[i]
+                mask.source = sources[i].isEmpty ? nil : sources[i]
+                mask.videoIndex = Int(video[i])
+                mask.frameIndex = Int(frameIdx[i])
+                mask.trackIndex = track[i] >= 0 ? Int(track[i]) : nil
+                masks.append(mask)
+            }
+
+            return masks
+        } catch {
+            // 1.5 is fully modeled — surface real read errors. For 1.6+ the schema may be
+            // extended/unknown; skip gracefully rather than failing the whole load.
+            if SLPReader.modelsAnnotationTables(formatId: formatId) { throw error }
+            return []
         }
-
-        var masks: [SegmentationMask] = []
-        for i in 0..<count {
-            let start = Int(rleStart[i])
-            let end = Int(rleEnd[i])
-            let rleBytes = Array(rleData[start..<min(end, rleData.count)])
-
-            // Decode uint32 RLE counts from packed bytes
-            let rleCounts = decodeRLECounts(from: rleBytes)
-
-            var mask = SegmentationMask(
-                rleCounts: rleCounts,
-                height: Int(height[i]),
-                width: Int(width[i]),
-                name: names[i]
-            )
-            mask.annotationType = decodeAnnotationType(annotationType[i])
-            mask.category = categories[i].isEmpty ? nil : categories[i]
-            mask.score = score[i]
-            mask.source = sources[i].isEmpty ? nil : sources[i]
-            mask.videoIndex = Int(video[i])
-            mask.frameIndex = Int(frameIdx[i])
-            mask.trackIndex = track[i] >= 0 ? Int(track[i]) : nil
-            masks.append(mask)
-        }
-
-        return masks
     }
 
     // MARK: - Helpers

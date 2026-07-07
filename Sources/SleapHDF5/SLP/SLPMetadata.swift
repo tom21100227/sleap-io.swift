@@ -5,7 +5,7 @@ import SleapIO
 struct SLPMetadata {
     var formatId: Float
     var skeletons: [Skeleton]
-    var provenance: [String: String]
+    var provenance: [String: JSONValue]
     var allNodeNames: [String]
 
     /// Parse the /metadata JSON attribute.
@@ -15,10 +15,12 @@ struct SLPMetadata {
             throw SleapIOError.corruptData("Cannot parse metadata JSON")
         }
 
-        var provenance: [String: String] = [:]
+        // Preserve arbitrary JSON provenance (mirrors Python dict[str, Any]) rather
+        // than string-coercing every value.
+        var provenance: [String: JSONValue] = [:]
         if let prov = root["provenance"] as? [String: Any] {
             for (k, v) in prov {
-                provenance[k] = "\(v)"
+                provenance[k] = JSONValue(jsonObject: v)
             }
         }
 

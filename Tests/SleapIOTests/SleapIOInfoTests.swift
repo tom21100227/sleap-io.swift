@@ -22,13 +22,13 @@ final class SleapIOInfoTests: XCTestCase {
         XCTAssertNil(labels.provenance[SleapIOInfo.provenanceVersionKey])
         let stamped = labels.stampSleapIOVersion()
         XCTAssertEqual(stamped, SleapIOInfo.version)
-        XCTAssertEqual(labels.provenance[SleapIOInfo.provenanceVersionKey], SleapIOInfo.version)
+        XCTAssertEqual(labels.provenance[SleapIOInfo.provenanceVersionKey], .string(SleapIOInfo.version))
     }
 
     func testStampOverwritesPreviousValue() {
         let labels = Labels()
         labels.provenance[SleapIOInfo.provenanceVersionKey] = "0.0.1"
         labels.stampSleapIOVersion()
-        XCTAssertEqual(labels.provenance[SleapIOInfo.provenanceVersionKey], SleapIOInfo.version)
+        XCTAssertEqual(labels.provenance[SleapIOInfo.provenanceVersionKey], .string(SleapIOInfo.version))
     }
 }

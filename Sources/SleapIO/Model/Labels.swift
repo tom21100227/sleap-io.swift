@@ -128,7 +128,12 @@ public final class Labels: @unchecked Sendable {
 
     public var suggestions: [SuggestionFrame]
     public var sessions: [RecordingSession]
-    public var provenance: [String: String]
+    /// Free-form provenance metadata, mirroring Python sleap-io's `dict[str, Any]`.
+    ///
+    /// Values are ``JSONValue`` so arbitrary JSON (strings, numbers, booleans,
+    /// nested arrays/objects) round-trips through save/load without being coerced
+    /// to strings.
+    public var provenance: [String: JSONValue]
     public var rois: [ROI]
     public var masks: [SegmentationMask]
 
@@ -153,7 +158,7 @@ public final class Labels: @unchecked Sendable {
                 tracks: [Track],
                 suggestions: [SuggestionFrame] = [],
                 sessions: [RecordingSession] = [],
-                provenance: [String: String] = [:],
+                provenance: [String: JSONValue] = [:],
                 rois: [ROI] = [],
                 masks: [SegmentationMask] = []) {
         self.frameStore = frameStore
