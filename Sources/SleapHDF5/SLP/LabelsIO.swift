@@ -7,9 +7,13 @@ extension Labels {
 
     /// Load labels from a file. Format is inferred from extension.
     /// For `.slp` files, this uses lazy loading by default.
+    /// `errorMode` is reserved for recoverable load paths; SLP lazy loading
+    /// currently has no recoverable errors to collect.
     public static func load(from url: URL,
-                            format: FileFormat? = nil) async throws -> Labels {
+                            format: FileFormat? = nil,
+                            errorMode: ErrorMode = .ignore) async throws -> Labels {
         let resolvedFormat = try format ?? inferLoadFormat(from: url)
+        _ = errorMode
 
         switch resolvedFormat {
         case .slp:
@@ -37,13 +41,18 @@ extension Labels {
     }
 
     /// Load labels eagerly (all frames materialized).
+    /// `errorMode` is reserved for recoverable load paths; eager SLP loading
+    /// currently has no recoverable errors to collect.
     public static func loadEager(from url: URL,
-                                 format: FileFormat? = nil) async throws -> Labels {
+                                 format: FileFormat? = nil,
+                                 errorMode: ErrorMode = .ignore,
+                                 progress: ProgressReporter? = nil) async throws -> Labels {
         let resolvedFormat = try format ?? inferLoadFormat(from: url)
+        _ = errorMode
 
         switch resolvedFormat {
         case .slp:
-            return try await SLPReader.read(from: url.path)
+            return try await SLPReader.read(from: url.path, progress: progress)
         case .cocoJSON:
             return try COCOCodec.read(from: url.path)
         case .csv:
@@ -69,13 +78,14 @@ extension Labels {
     /// Save labels to a file. Format is inferred from extension.
     public func save(to url: URL,
                      format: FileFormat? = nil,
-                     options: SaveOptions = .defaults) async throws {
+                     options: SaveOptions = .defaults,
+                     progress: ProgressReporter? = nil) async throws {
         let resolvedFormat = try format ?? Labels.inferSaveFormat(from: url)
 
         switch resolvedFormat {
         case .slp:
             stampSleapIOVersion()
-            try await SLPWriter.write(self, to: url.path)
+            try await SLPWriter.write(self, to: url.path, progress: progress)
         case .cocoJSON:
             try COCOCodec.write(self, to: url.path)
         case .csv:

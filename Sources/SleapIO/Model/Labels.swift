@@ -1,5 +1,7 @@
 import Foundation
 
+public typealias SleapIOWarning = RecoverableSleapError
+
 /// Protocol for frame stores that can provide metadata without materialization.
 public protocol FrameMetadataProvider {
     func frameMetadata() -> [(videoIndex: Int, frameIndex: Int)]
@@ -360,8 +362,25 @@ public final class Labels: @unchecked Sendable {
     }
 
     /// Merge another Labels into this one.
-    public func merge(from other: Labels, strategy: LabeledFrame.MergeStrategy = .auto) throws {
+    @discardableResult
+    public func merge(
+        from other: Labels,
+        strategy: LabeledFrame.MergeStrategy = .auto,
+        errorMode: ErrorMode = .ignore
+    ) throws -> [SleapIOWarning] {
         try requireMaterialized("merge")
+
+        var collector = ErrorCollector()
+        for incoming in other.skeletons {
+            if !_skeletons.contains(where: { $0.matches(incoming) }) {
+                let error = RecoverableSleapError.skeletonMismatch(
+                    expected: _skeletons.flatMap(\.nodeNames),
+                    found: incoming.nodeNames
+                )
+                try collector.handle(error, mode: errorMode)
+            }
+        }
+
         // Merge identity tables
         for video in other.videos {
             if !_videos.contains(where: { $0 === video }) {
@@ -390,6 +409,8 @@ public final class Labels: @unchecked Sendable {
                 invalidateFrameLookup()
             }
         }
+
+        return collector.errors
     }
 
     // MARK: - Convenience

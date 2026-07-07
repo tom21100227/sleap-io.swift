@@ -10,19 +10,21 @@ public struct SLPReader {
 
     /// Read an SLP file and return a Labels object.
     /// This is the eager path — all frames are fully materialized.
-    public static func read(from path: String) async throws -> Labels {
+    public static func read(from path: String, progress: ProgressReporter? = nil) async throws -> Labels {
         guard FileManager.default.fileExists(atPath: path) else {
             throw SleapIOError.fileNotFound("File not found: \(path)")
         }
 
         let actor = try HDF5FileActor.openReadOnly(path: path)
         return try await actor.withFile { file in
-            try readFromFile(file)
+            try readFromFile(file, progress: progress)
         }
     }
 
     /// Read from an open HDF5File (internal, for use within module).
-    static func readFromFile(_ file: HDF5File) throws -> Labels {
+    static func readFromFile(_ file: HDF5File, progress: ProgressReporter? = nil) throws -> Labels {
+        progress?(0)
+
         // 1. Read metadata
         let metadataGroup = try file.openGroup(name: "metadata")
         let formatId = try metadataGroup.readFloatAttribute(name: "format_id")
@@ -73,11 +75,12 @@ public struct SLPReader {
             formatId: formatId
         )
 
-        let frames = buildFrames(
+        let frames = try buildFrames(
             frameData: frameData,
             allInstances: allInstances,
             videos: videos,
-            videoIdMap: videoIdMap
+            videoIdMap: videoIdMap,
+            progress: progress
         )
 
         // 9. Resolve from_predicted (second pass)
@@ -107,7 +110,7 @@ public struct SLPReader {
         }
 
         let store = EagerFrameStore(frames: frames)
-        return Labels(
+        let labels = Labels(
             frameStore: store,
             videos: videos,
             skeletons: skeletons,
@@ -118,6 +121,8 @@ public struct SLPReader {
             rois: rois,
             masks: masks
         )
+        progress?(1.0)
+        return labels
     }
 
     // MARK: - Read tracks
@@ -352,12 +357,19 @@ public struct SLPReader {
         frameData: [FrameRow],
         allInstances: [Instance],
         videos: [Video],
-        videoIdMap: [Int: Int]
-    ) -> [LabeledFrame] {
+        videoIdMap: [Int: Int],
+        progress: ProgressReporter?
+    ) throws -> [LabeledFrame] {
         var frames: [LabeledFrame] = []
         frames.reserveCapacity(frameData.count)
 
-        for row in frameData {
+        let total = frameData.count
+        for (offset, row) in frameData.enumerated() {
+            try Task.checkCancellation()
+            if total > 0 {
+                progress?(Double(offset) / Double(total))
+            }
+
             guard let videoIdx = SLPVideoTable.resolvedIndex(
                 for: row.video,
                 videoIdMap: videoIdMap,
@@ -375,6 +387,9 @@ public struct SLPReader {
             frames.append(frame)
         }
 
+        if total > 0 {
+            progress?(1.0)
+        }
         return frames
     }
 

@@ -10,7 +10,10 @@ public struct SLPWriter {
     ///
     /// When the destination path matches a source file used by embedded videos,
     /// writes to a temporary file first, then atomically replaces the original.
-    public static func write(_ labels: Labels, to path: String) async throws {
+    public static func write(_ labels: Labels, to path: String, progress: ProgressReporter? = nil) async throws {
+        progress?(0)
+        try Task.checkCancellation()
+
         // Check if any embedded video's source is the same as the destination.
         let needsAtomicReplace = labels.videos.contains { video in
             guard let backend = video.backend as? SleapHDF5EmbeddedVideoBackend,
@@ -23,19 +26,21 @@ public struct SLPWriter {
             let tempPath = path + ".sleap-tmp-\(UUID().uuidString)"
             let actor = try HDF5FileActor.create(path: tempPath)
             try await actor.withFile { file in
-                try writeToFile(labels, file: file)
+                try writeToFile(labels, file: file, progress: progress)
             }
             // Close source HDF5 handles by letting the actor deinit,
             // then atomically replace.
+            try Task.checkCancellation()
             let fm = FileManager.default
             _ = try fm.replaceItemAt(URL(fileURLWithPath: path),
                                      withItemAt: URL(fileURLWithPath: tempPath))
         } else {
             let actor = try HDF5FileActor.create(path: path)
             try await actor.withFile { file in
-                try writeToFile(labels, file: file)
+                try writeToFile(labels, file: file, progress: progress)
             }
         }
+        progress?(1.0)
     }
 
     /// Resolve a path to a canonical absolute path for comparison.
@@ -44,7 +49,7 @@ public struct SLPWriter {
     }
 
     /// Write to an open HDF5File (internal).
-    static func writeToFile(_ labels: Labels, file: HDF5File) throws {
+    static func writeToFile(_ labels: Labels, file: HDF5File, progress: ProgressReporter? = nil) throws {
         let hasROIs = !labels.rois.isEmpty
         let hasMasks = !labels.masks.isEmpty
         let formatId: Float = (hasROIs || hasMasks) ? 1.5 : 1.4
@@ -57,10 +62,10 @@ public struct SLPWriter {
 
         // 3. Write videos
         try writeVideos(labels.videos, file: file)
-        try writeEmbeddedVideos(labels.videos, file: file)
+        try writeEmbeddedVideos(labels.videos, file: file, progress: progress)
 
         // 4. Collect and write compound datasets
-        try writeCompoundData(labels, file: file)
+        try writeCompoundData(labels, file: file, progress: progress)
 
         // 5. Write negative frames
         try writeNegativeFrames(labels, file: file)
@@ -159,7 +164,7 @@ public struct SLPWriter {
         try file.writeVLenStringDataset(name: "videos_json", strings: videoJsons)
     }
 
-    private static func writeEmbeddedVideos(_ videos: [Video], file: HDF5File) throws {
+    private static func writeEmbeddedVideos(_ videos: [Video], file: HDF5File, progress: ProgressReporter?) throws {
         for (index, video) in videos.enumerated() {
             guard video.backendType.lowercased().hasPrefix("hdf5") else { continue }
             guard let backend = video.backend as? SleapHDF5EmbeddedVideoBackend else { continue }
@@ -176,8 +181,16 @@ public struct SLPWriter {
             }
 
             // Fallback: write from in-memory cache (degraded mode).
-            let frameData = backend.embeddedFrames.keys.sorted().compactMap { frameIndex in
-                backend.embeddedFrames[frameIndex].map { (sourceFrameIdx: frameIndex, data: $0) }
+            let frameIndices = backend.embeddedFrames.keys.sorted()
+            var frameData: [(sourceFrameIdx: Int, data: Data)] = []
+            frameData.reserveCapacity(frameIndices.count)
+            for (offset, frameIndex) in frameIndices.enumerated() {
+                // Safe cancellation point: embedded frames are still staged in memory.
+                try Task.checkCancellation()
+                progress?(0.05 * Double(offset) / Double(frameIndices.count))
+                if let data = backend.embeddedFrames[frameIndex] {
+                    frameData.append((sourceFrameIdx: frameIndex, data: data))
+                }
             }
 
             try EmbeddedVideo.writeFrames(
@@ -193,7 +206,7 @@ public struct SLPWriter {
 
     // MARK: - Write compound datasets (frames, instances, points, pred_points)
 
-    private static func writeCompoundData(_ labels: Labels, file: HDF5File) throws {
+    private static func writeCompoundData(_ labels: Labels, file: HDF5File, progress: ProgressReporter?) throws {
         // Build index maps
         var videoIndexMap: [ObjectIdentifier: Int] = [:]
         for (i, v) in labels.videos.enumerated() { videoIndexMap[ObjectIdentifier(v)] = i }
@@ -215,6 +228,10 @@ public struct SLPWriter {
         var globalInstanceIdx = 0
 
         for i in 0..<labels.frameStore.count {
+            // Safe cancellation point: compound rows are still staged in memory.
+            try Task.checkCancellation()
+            progress?(0.05 + 0.45 * Double(i) / Double(labels.frameStore.count))
+
             let frame = labels.frameStore.frame(at: i)
             for inst in frame.instances {
                 instanceIndexMap[ObjectIdentifier(inst)] = globalInstanceIdx
@@ -224,6 +241,10 @@ public struct SLPWriter {
 
         var instanceIdx = 0
         for i in 0..<labels.frameStore.count {
+            // Safe cancellation point: compound rows are still staged in memory.
+            try Task.checkCancellation()
+            progress?(0.50 + 0.45 * Double(i) / Double(labels.frameStore.count))
+
             let frame = labels.frameStore.frame(at: i)
             let videoIdx = videoIndexMap[ObjectIdentifier(frame.video)] ?? 0
             let instStart = instanceIdx
