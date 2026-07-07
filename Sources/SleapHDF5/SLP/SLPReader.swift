@@ -144,7 +144,8 @@ public struct SLPReader {
         try markNegativeFrames(from: file, frames: frames, videos: videos, videoIdMap: videoIdMap)
 
         // 12. Read sessions
-        let sessions = try readSessions(from: file, videos: videos, videoIdMap: videoIdMap)
+        let sessions = try readSessions(
+            from: file, videos: videos, videoIdMap: videoIdMap, frames: frames)
 
         // 13. Read ROIs
         let rois = try readROIs(from: file, formatId: formatId)
@@ -538,8 +539,15 @@ public struct SLPReader {
 
     // MARK: - Read sessions
 
+    /// Read ``RecordingSession``s from `/sessions_json`, adopting the
+    /// Python-compatible schema (see ``SessionSchema``): `calibration` restores
+    /// each ``Camera``'s intrinsics/extrinsics/distortion,
+    /// `camcorder_to_video_idx_map` restores the camera→video mapping, and
+    /// `frame_group_dicts` restores synchronized frame groups (relinked against
+    /// `frames`). Sessions written with the older bespoke `camera_to_video`
+    /// schema still load, preserving prior `cameraToVideo` behavior.
     private static func readSessions(
-        from file: HDF5File, videos: [Video], videoIdMap: [Int: Int]
+        from file: HDF5File, videos: [Video], videoIdMap: [Int: Int], frames: [LabeledFrame]
     ) throws -> [RecordingSession] {
         guard file.exists(name: "sessions_json") else { return [] }
         let ds = try file.openDataset(name: "sessions_json")
@@ -551,26 +559,8 @@ public struct SLPReader {
                   let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
             }
-            // Basic session parsing — cameras and video mapping
-            let session = RecordingSession()
-
-            if let camVideos = dict["camera_to_video"] as? [[String: Any]] {
-                for cv in camVideos {
-                    let camName = cv["camera_name"] as? String ?? "camera"
-                    let videoIdx = cv["video_idx"] as? Int ?? 0
-                    let camera = Camera(name: camName)
-                    guard let resolvedIdx = SLPVideoTable.resolvedIndex(
-                        for: videoIdx,
-                        videoIdMap: videoIdMap,
-                        videoCount: videos.count
-                    ) else {
-                        continue
-                    }
-                    session.cameraToVideo[camera] = videos[resolvedIdx]
-                }
-            }
-
-            sessions.append(session)
+            sessions.append(SessionSchema.makeSession(
+                from: dict, videos: videos, videoIdMap: videoIdMap, frames: frames))
         }
         return sessions
     }

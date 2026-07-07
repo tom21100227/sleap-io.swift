@@ -56,19 +56,9 @@ public struct SLPWriter {
         let hasCentroids = !labels.centroids.isEmpty
         let hasIdentities = !labels.identities.isEmpty
 
-        // Format-version stamping mirrors Python: /bboxes bumps to 1.7, /rois or
-        // /masks to 1.5, otherwise 1.4; identities (new in 1.9) bump to >= 1.9.
-        // Centroids have no Python analog; they are treated like /bboxes (>= 1.7).
-        var formatId: Float
-        if hasBboxes {
-            formatId = 1.7
-        } else if hasROIs || hasMasks {
-            formatId = 1.5
-        } else {
-            formatId = 1.4
-        }
-        if hasCentroids { formatId = max(formatId, 1.7) }
-        if hasIdentities { formatId = max(formatId, 1.9) }
+        // Stamp the minimum format version that can represent this data
+        // (downgrade-on-save), so the oldest compatible SLEAP can still open it.
+        let formatId = minimumFormatId(for: labels)
 
         // 1. Write metadata
         try writeMetadata(labels, file: file, formatId: formatId)
@@ -116,6 +106,33 @@ public struct SLPWriter {
         if hasCentroids {
             try writeCentroids(labels.centroids, file: file)
         }
+    }
+
+    // MARK: - Write-version migration
+
+    /// Choose the minimum SLP `format_id` that faithfully represents `labels`,
+    /// mirroring Python sleap-io's downgrade-on-save. Rather than a single
+    /// hard-coded version, each feature contributes a floor and the file is
+    /// stamped with the highest floor among the features actually present, so the
+    /// output stays readable by the oldest SLEAP that understands those features.
+    ///
+    /// Floors (Python's format-version history plus the Swift port's extensions):
+    ///   - **1.2** (base): the writer always emits center-origin coordinates
+    ///     (1.1) and the `tracking_score` field on `/instances` (1.2), so a
+    ///     points-only file downgrades to 1.2.
+    ///   - **1.4**: embedded (HDF5) video datasets carry the `channel_order`
+    ///     attribute.
+    ///   - **1.5**: `/rois` or `/masks` tables are present.
+    ///   - **1.7**: `/bboxes` or `/centroids` tables are present (Swift port
+    ///     extension; centroids have no Python analog and follow bboxes).
+    ///   - **1.9**: `/identities_json` is present (Swift port extension).
+    static func minimumFormatId(for labels: Labels) -> Float {
+        var formatId: Float = 1.2
+        if labels.hasEmbeddedVideo { formatId = max(formatId, 1.4) }
+        if !labels.rois.isEmpty || !labels.masks.isEmpty { formatId = max(formatId, 1.5) }
+        if !labels.bboxes.isEmpty || !labels.centroids.isEmpty { formatId = max(formatId, 1.7) }
+        if !labels.identities.isEmpty { formatId = max(formatId, 1.9) }
+        return formatId
     }
 
     // MARK: - Write metadata
@@ -587,25 +604,41 @@ public struct SLPWriter {
 
     // MARK: - Write sessions
 
+    /// Write ``RecordingSession``s to `/sessions_json` using the Python-compatible
+    /// schema (see ``SessionSchema``): `calibration` + `camcorder_to_video_idx_map`
+    /// + `frame_group_dicts`, plus a legacy `camera_to_video` array for
+    /// old-schema readers. Camera intrinsics/extrinsics/distortion are persisted
+    /// via ``Camera``'s existing public API.
     private static func writeSessions(_ labels: Labels, file: HDF5File) throws {
         guard !labels.sessions.isEmpty else { return }
 
         var videoIndexMap: [ObjectIdentifier: Int] = [:]
         for (i, v) in labels.videos.enumerated() { videoIndexMap[ObjectIdentifier(v)] = i }
 
+        // Index maps for frame-group serialization (mirrors Python's
+        // labeled_frame_to_idx / instance_to_lf_and_inst_idx).
+        var labeledFrameToIdx: [ObjectIdentifier: Int] = [:]
+        var instanceToLfInst: [ObjectIdentifier: (Int, Int)] = [:]
+        for i in 0..<labels.frameStore.count {
+            let frame = labels.frameStore.frame(at: i)
+            labeledFrameToIdx[ObjectIdentifier(frame)] = i
+            for (instIdx, inst) in frame.instances.enumerated() {
+                instanceToLfInst[ObjectIdentifier(inst)] = (i, instIdx)
+            }
+        }
+
         var strings: [String] = []
         for session in labels.sessions {
-            var camVideos: [[String: Any]] = []
-            for (camera, video) in session.cameraToVideo {
-                let videoIdx = videoIndexMap[ObjectIdentifier(video)] ?? 0
-                camVideos.append([
-                    "camera_name": camera.name,
-                    "video_idx": videoIdx
-                ])
-            }
-            let dict: [String: Any] = ["camera_to_video": camVideos]
+            let orderedCameras = SessionSchema.orderedCameras(for: session)
+            let dict = SessionSchema.sessionDict(
+                session,
+                orderedCameras: orderedCameras,
+                videoIndexMap: videoIndexMap,
+                labeledFrameToIdx: labeledFrameToIdx,
+                instanceToLfInst: instanceToLfInst
+            )
             let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
-            strings.append(String(data: data, encoding: .utf8) ?? "")
+            strings.append(String(data: data, encoding: .utf8) ?? "{}")
         }
 
         try file.writeVLenStringDataset(name: "sessions_json", strings: strings)

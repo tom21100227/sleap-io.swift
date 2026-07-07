@@ -61,32 +61,72 @@ public actor AVFoundationBackend: VideoBackend {
     public init(url: URL) async throws {
         let asset = AVURLAsset(url: url)
         let info = try await Self.loadTrackInfo(from: asset)
+        let generator = Self.makeGenerator(for: asset)
+        let channels = await Self.detectChannels(
+            generator: generator,
+            timescale: info.duration.timescale,
+            fallback: info.frameSize.channels
+        )
         self.asset = asset
         self.frameCache = nil
         self._fps = info.fps
         self.duration = info.duration
         self._frameCount = info.frameCount
-        self._frameSize = info.frameSize
-        self.generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.requestedTimeToleranceBefore = .zero
-        generator.requestedTimeToleranceAfter = .zero
+        self._frameSize = (
+            height: info.frameSize.height,
+            width: info.frameSize.width,
+            channels: channels
+        )
+        self.generator = generator
     }
 
     /// Create a backend for a video file with a shared frame cache.
     init(url: URL, frameCache: FrameCache?) async throws {
         let asset = AVURLAsset(url: url)
         let info = try await Self.loadTrackInfo(from: asset)
+        let generator = Self.makeGenerator(for: asset)
+        let channels = await Self.detectChannels(
+            generator: generator,
+            timescale: info.duration.timescale,
+            fallback: info.frameSize.channels
+        )
         self.asset = asset
         self.frameCache = frameCache
         self._fps = info.fps
         self.duration = info.duration
         self._frameCount = info.frameCount
-        self._frameSize = info.frameSize
-        self.generator = AVAssetImageGenerator(asset: asset)
+        self._frameSize = (
+            height: info.frameSize.height,
+            width: info.frameSize.width,
+            channels: channels
+        )
+        self.generator = generator
+    }
+
+    /// Build an image generator configured for frame-accurate extraction.
+    private static func makeGenerator(for asset: AVURLAsset) -> AVAssetImageGenerator {
+        let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
+        return generator
+    }
+
+    /// Autodetect the channel count by sampling the decoded first frame: a frame
+    /// whose first and last color channels match is grayscale (1 channel),
+    /// otherwise color (3 channels). Falls back to `fallback` when the first
+    /// frame cannot be decoded.
+    private static func detectChannels(
+        generator: AVAssetImageGenerator,
+        timescale: CMTimeScale,
+        fallback: Int
+    ) async -> Int {
+        let scale = timescale != 0 ? timescale : 600
+        let time = CMTimeMakeWithSeconds(0, preferredTimescale: scale)
+        guard let (image, _) = try? await generator.image(at: time) else {
+            return fallback
+        }
+        return VideoPixelBuffer.isGrayscale(image) ? 1 : 3
     }
 
     nonisolated public var frameCount: Int? { _frameCount }

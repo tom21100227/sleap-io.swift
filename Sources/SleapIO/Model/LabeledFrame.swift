@@ -243,9 +243,15 @@ public final class LabeledFrame: Hashable, @unchecked Sendable {
 
     /// Resolve the `isNegative` marking after merging in another frame's data.
     ///
-    /// A frame that ends up with instances cannot be negative; if a negative
-    /// marking is cleared as a result, that is reported as a conflict. When the
-    /// merged frame is still empty, negativity carries over from either frame.
+    /// A frame that ends up with *any* instance — user or predicted — cannot be
+    /// negative, since a negative frame asserts "no objects here"; if a negative
+    /// marking is cleared as a result (on either side of the merge), that is
+    /// reported as a conflict. When the merged frame is still empty, negativity
+    /// carries over from either frame, so merging two negatives keeps the frame
+    /// negative.
+    ///
+    /// This preserves the invariant relied on by ``kind``: a populated frame is
+    /// never classified ``Kind/negative``.
     private func resolveNegative(
         mergingFrom other: LabeledFrame,
         into conflicts: inout [ConflictResolution]

@@ -22,7 +22,10 @@ extension Labels {
     /// - Parameters:
     ///   - frames: When `true`, remove frames that end up with no instances —
     ///     **except** frames explicitly marked ``LabeledFrame/isNegative``, which are
-    ///     always preserved.
+    ///     always preserved. Note this prunes on *instance presence*, not on
+    ///     ``LabeledFrame/kind``: a prediction-only frame (classified
+    ///     ``LabeledFrame/Kind/empty``) still has instances and is retained; only
+    ///     frames with zero instances that are not negative are dropped.
     ///   - instances: When `true`, remove instances that have no visible points.
     ///   - skeletons: When `true`, remove skeletons no longer referenced by any
     ///     remaining instance.

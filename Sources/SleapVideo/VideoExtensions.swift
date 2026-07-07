@@ -192,6 +192,19 @@ extension Video {
         return results.compactMap { $0 }
     }
 
+    /// Extract a single frame as a raw row-major `(height, width, channels)` UInt8
+    /// buffer, alongside the ``frame(at:)`` `CGImage` path.
+    ///
+    /// The channel count follows the backend's autodetected ``frameSize`` (grayscale
+    /// videos collapse to a single channel), mirroring the upstream `(H, W, C)`
+    /// ndarray returned by `Video.get_frame`.
+    public func rawFrame(at index: Int) async throws -> RawFrame {
+        guard let be = backend else {
+            throw SleapIOError.videoError("Video backend not opened. Call open() first.")
+        }
+        return try await be.rawFrame(at: index)
+    }
+
     /// Async subscript for frame access.
     public subscript(index: Int) -> CGImage {
         get async throws {
