@@ -10,9 +10,48 @@ public struct SLPWriter {
     ///
     /// When the destination path matches a source file used by embedded videos,
     /// writes to a temporary file first, then atomically replaces the original.
-    public static func write(_ labels: Labels, to path: String, progress: ProgressReporter? = nil) async throws {
+    ///
+    /// - Parameters:
+    ///   - embed: Which frames, if any, to embed as image data in the saved file
+    ///     (mirrors Python sleap-io's `embed=`). Defaults to ``EmbedSelection/none``,
+    ///     which leaves the writer's behavior unchanged: external videos stay
+    ///     referenced by path and already-embedded videos are preserved verbatim.
+    ///     When a selection embeds frames, they are decoded via the video backends
+    ///     and re-encoded with `imageFormat` into per-video `/videoN` groups, each
+    ///     carrying a `source_video` lineage back to the original video.
+    ///   - imageFormat: The image format used when re-encoding embedded frames.
+    ///     Reuses ``SleapIO/SaveOptions/EmbeddedImageFormat``; defaults to `.png`
+    ///     (lossless), matching Python's embed default. Ignored when not embedding.
+    public static func write(
+        _ labels: Labels,
+        to path: String,
+        embed: EmbedSelection = .none,
+        imageFormat: SaveOptions.EmbeddedImageFormat = .png,
+        progress: ProgressReporter? = nil
+    ) async throws {
         progress?(0)
         try Task.checkCancellation()
+
+        // Decode + re-encode the frames selected for embedding *before* opening
+        // the destination file: frame decoding is async and cannot run inside the
+        // synchronous HDF5 write closure. `embed == .none` returns an empty plan
+        // without touching the video backends or the progress reporter, so the
+        // non-embedding path is byte-for-byte the historical behavior.
+        let embedProgress: ProgressReporter? = progress.map { p in { p(0.4 * $0) } }
+        let plan = try await EmbedPipeline.buildPlan(
+            labels: labels, embed: embed, imageFormat: imageFormat, progress: embedProgress)
+
+        // When frames were embedded, reserve the first 40% of the progress budget
+        // for the decode/encode phase and scale the file-write phase into the
+        // remaining 60%, keeping the reported fraction monotonic. Otherwise the
+        // file-write phase drives progress directly (unchanged).
+        let didEmbedFrames = !plan.videos.isEmpty
+        let writeProgress: ProgressReporter?
+        if didEmbedFrames, let p = progress {
+            writeProgress = { p(0.4 + 0.6 * $0) }
+        } else {
+            writeProgress = progress
+        }
 
         // Check if any embedded video's source is the same as the destination.
         let needsAtomicReplace = labels.videos.contains { video in
@@ -26,7 +65,7 @@ public struct SLPWriter {
             let tempPath = path + ".sleap-tmp-\(UUID().uuidString)"
             let actor = try HDF5FileActor.create(path: tempPath)
             try await actor.withFile { file in
-                try writeToFile(labels, file: file, progress: progress)
+                try writeToFile(labels, file: file, embedPlan: plan, progress: writeProgress)
             }
             // Close source HDF5 handles by letting the actor deinit,
             // then atomically replace.
@@ -37,7 +76,7 @@ public struct SLPWriter {
         } else {
             let actor = try HDF5FileActor.create(path: path)
             try await actor.withFile { file in
-                try writeToFile(labels, file: file, progress: progress)
+                try writeToFile(labels, file: file, embedPlan: plan, progress: writeProgress)
             }
         }
         progress?(1.0)
@@ -49,7 +88,13 @@ public struct SLPWriter {
     }
 
     /// Write to an open HDF5File (internal).
-    static func writeToFile(_ labels: Labels, file: HDF5File, progress: ProgressReporter? = nil) throws {
+    ///
+    /// - Parameter embedPlan: The resolved embed plan from ``EmbedPipeline``, or
+    ///   `nil`/empty for a plain save. Videos in ``EmbedPlan/videos`` are written
+    ///   as embedded `/videoN` groups (with a self-referencing `source_video`
+    ///   lineage); videos in ``EmbedPlan/restoreOriginal`` are rewritten to point
+    ///   at their source video instead of an embedded dataset.
+    static func writeToFile(_ labels: Labels, file: HDF5File, embedPlan: EmbedPlan? = nil, progress: ProgressReporter? = nil) throws {
         let hasROIs = !labels.rois.isEmpty
         let hasMasks = !labels.masks.isEmpty
         let hasBboxes = !labels.bboxes.isEmpty
@@ -59,7 +104,12 @@ public struct SLPWriter {
 
         // Stamp the minimum format version that can represent this data
         // (downgrade-on-save), so the oldest compatible SLEAP can still open it.
-        let formatId = minimumFormatId(for: labels)
+        var formatId = minimumFormatId(for: labels)
+        // Newly embedded videos carry the `channel_order` attribute (format 1.4),
+        // even when the in-memory videos are still external (media) backends.
+        if !(embedPlan?.videos.isEmpty ?? true) {
+            formatId = max(formatId, 1.4)
+        }
 
         // 1. Write metadata
         try writeMetadata(labels, file: file, formatId: formatId)
@@ -68,8 +118,8 @@ public struct SLPWriter {
         try writeTracks(labels.tracks, file: file)
 
         // 3. Write videos
-        try writeVideos(labels.videos, file: file)
-        try writeEmbeddedVideos(labels.videos, file: file, progress: progress)
+        try writeVideos(labels.videos, file: file, embedPlan: embedPlan)
+        try writeEmbeddedVideos(labels.videos, file: file, embedPlan: embedPlan, progress: progress)
 
         // 4. Collect and write compound datasets
         try writeCompoundData(labels, file: file, progress: progress)
@@ -193,15 +243,52 @@ public struct SLPWriter {
 
     // MARK: - Write videos
 
-    private static func writeVideos(_ videos: [Video], file: HDF5File) throws {
+    private static func writeVideos(_ videos: [Video], file: HDF5File, embedPlan: EmbedPlan? = nil) throws {
         guard !videos.isEmpty else { return }
         var videoJsons: [String] = []
-        for video in videos {
-            let dict = encodeVideo(video)
+        for (index, video) in videos.enumerated() {
+            let dict: [String: Any]
+            if let plan = embedPlan?.videos[index] {
+                // Video is being embedded on this save: describe the embedded HDF5
+                // backend and nest the original (external) video as `source_video`.
+                dict = embeddedVideoJSON(videoIndex: index, plan: plan, video: video)
+            } else if embedPlan?.restoreOriginal.contains(index) == true,
+                      let source = video.sourceVideo {
+                // embed = .source: restore the original external video reference,
+                // dropping the embedded dataset entirely.
+                dict = encodeVideo(source)
+            } else {
+                dict = encodeVideo(video)
+            }
             let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
             videoJsons.append(String(data: data, encoding: .utf8) ?? "")
         }
         try file.writeVLenStringDataset(name: "videos_json", strings: videoJsons)
+    }
+
+    /// Build the `videos_json` entry for a freshly embedded video: an
+    /// `HDF5Video`-style backend pointing at this file's `/videoN/video` dataset,
+    /// with the pre-embedding (external) video nested under `source_video`.
+    ///
+    /// `filename` is `"."` (the Python convention for "this container") and `type`
+    /// is `"HDF5Video"`, both of which route the reader to the embedded backend.
+    /// The nested `source_video` mirrors what is also written into the
+    /// `/videoN/source_video` HDF5 group, so lineage survives a round-trip whether
+    /// it is read inline or recovered from the group.
+    private static func embeddedVideoJSON(videoIndex: Int, plan: EmbeddedVideoPlan, video: Video) -> [String: Any] {
+        let backend: [String: Any] = [
+            "filename": ".",
+            "type": "HDF5Video",
+            "dataset": "video\(videoIndex)/video",
+            "format": plan.format,
+            "channel_order": plan.channelOrder,
+            "shape": [plan.frames.count, plan.height, plan.width, plan.channels],
+        ]
+        var dict: [String: Any] = ["backend": backend]
+        // The video as it stands (external source) becomes this embedded video's
+        // source; `encodeVideo` recursively preserves any deeper source chain.
+        dict["source_video"] = encodeVideo(video)
+        return dict
     }
 
     /// Encode a ``Video`` to its Python-compatible `videos_json` dictionary — the
@@ -253,8 +340,27 @@ public struct SLPWriter {
         return json
     }
 
-    private static func writeEmbeddedVideos(_ videos: [Video], file: HDF5File, progress: ProgressReporter?) throws {
+    private static func writeEmbeddedVideos(_ videos: [Video], file: HDF5File, embedPlan: EmbedPlan? = nil, progress: ProgressReporter?) throws {
         for (index, video) in videos.enumerated() {
+            // Freshly embedded videos: write the decoded/re-encoded frames from
+            // the plan into a new `/videoN` group with source_video lineage.
+            if let plan = embedPlan?.videos[index] {
+                try Task.checkCancellation()
+                try EmbeddedVideo.writeFrames(
+                    frameData: plan.frames,
+                    videoIndex: index,
+                    sourceVideoJSON: plan.sourceVideoJSON,
+                    format: plan.format,
+                    channelOrder: plan.channelOrder,
+                    to: file
+                )
+                continue
+            }
+
+            // embed = .source: the video was rewritten to reference its source
+            // video (see `writeVideos`), so no embedded group is written here.
+            if embedPlan?.restoreOriginal.contains(index) == true { continue }
+
             guard video.backendType.lowercased().hasPrefix("hdf5") else { continue }
             guard let backend = video.backend as? SleapHDF5EmbeddedVideoBackend else { continue }
 

@@ -16,7 +16,10 @@ import SleapIO
 ///   - `frame_group_dicts`: a list of ``FrameGroup`` dictionaries, each holding
 ///     `instance_groups` whose `camcorder_to_lf_and_inst_idx_map` links a camera
 ///     index to a `[labeledFrameIdx, instanceIdx]` pair, plus an optional
-///     `frame_idx`.
+///     `frame_idx`. When an ``InstanceGroup`` carries a triangulated
+///     ``Instance3D``, that pose is additionally persisted under the additive
+///     `points` (per-node `[x,y,z]` rows or `null`) and optional `score` keys;
+///     readers that don't model 3D poses simply ignore them.
 ///
 /// For back-compat with the older bespoke schema (and readers that only model
 /// it), ``sessionDict(_:orderedCameras:videoIndexMap:labeledFrameToIdx:instanceToLfInst:)``
@@ -147,9 +150,32 @@ enum SessionSchema {
                 map[String(camIdx)] = [lfIdx, instIdx]
             }
             guard !map.isEmpty else { continue }
-            result.append(["camcorder_to_lf_and_inst_idx_map": map])
+            var dict: [String: Any] = ["camcorder_to_lf_and_inst_idx_map": map]
+            // Additive: persist the triangulated 3D pose when present so an
+            // aggregated ``Instance3D`` survives the round-trip. Rows are `[x,y,z]`
+            // for visible points and JSON `null` for missing ones (avoids NaN,
+            // which `JSONSerialization` rejects). Python readers that don't model
+            // this key simply ignore it.
+            if let instance3D = instanceGroup.instance3D {
+                dict["points"] = points3DArray(instance3D)
+                if let score = instance3D.score {
+                    dict["score"] = Double(score)
+                }
+            }
+            result.append(dict)
         }
         return result
+    }
+
+    /// Encode an ``Instance3D`` as a list of per-node rows: `[x, y, z]` (doubles)
+    /// for visible, finite points and `NSNull` for missing ones.
+    private static func points3DArray(_ instance3D: Instance3D) -> [Any] {
+        instance3D.points.map { point -> Any in
+            guard point.visible, point.x.isFinite, point.y.isFinite, point.z.isFinite else {
+                return NSNull()
+            }
+            return [Double(point.x), Double(point.y), Double(point.z)]
+        }
     }
 
     private static func nestedMatrix(_ flat: [Float]) -> Any {
@@ -286,9 +312,42 @@ enum SessionSchema {
                 instanceGroup.instances[camera] = labeledFrame.instances[instIdx]
                 group.frames[camera] = labeledFrame
             }
-            if !instanceGroup.instances.isEmpty { group.instanceGroups.append(instanceGroup) }
+            if !instanceGroup.instances.isEmpty {
+                decodeInstance3D(from: instanceGroupDict, into: instanceGroup)
+                group.instanceGroups.append(instanceGroup)
+            }
         }
         return group
+    }
+
+    /// Reconstruct an ``Instance3D`` from the additive `points` (and optional
+    /// `score`) keys written by ``points3DArray(_:)``.
+    ///
+    /// The skeleton and node order are taken from the group's already-decoded 2D
+    /// instances. A `null` (or malformed) row decodes to a missing point. Does
+    /// nothing when `points` is absent, empty, or does not match the node count.
+    private static func decodeInstance3D(
+        from dict: [String: Any],
+        into instanceGroup: InstanceGroup
+    ) {
+        guard let rows = dict["points"] as? [Any],
+              let skeleton = instanceGroup.instances.values.first?.skeleton,
+              rows.count == skeleton.nodes.count else { return }
+        var points: [Point3D] = []
+        points.reserveCapacity(rows.count)
+        for row in rows {
+            if let coords = row as? [Any], coords.count == 3,
+               let x = doubleValue(coords[0]),
+               let y = doubleValue(coords[1]),
+               let z = doubleValue(coords[2]) {
+                points.append(Point3D(x: Float(x), y: Float(y), z: Float(z), visible: true))
+            } else {
+                points.append(.missing)
+            }
+        }
+        let instance3D = Instance3D(skeleton: skeleton, points: points)
+        if let score = doubleValue(dict["score"]) { instance3D.score = Float(score) }
+        instanceGroup.instance3D = instance3D
     }
 
     // MARK: - JSON coercion helpers
