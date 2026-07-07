@@ -2,6 +2,10 @@ import Foundation
 import SleapIO
 
 /// Standalone skeleton file load/save helpers.
+///
+/// Unlike the package codec convention of `read(from: String)` and
+/// `write(_:to: String)`, this helper intentionally takes file URLs and returns
+/// bare `Skeleton` values because standalone skeleton files are not label files.
 public struct SkeletonFileCodec {
 
     /// Load a standalone skeleton JSON file, or extract the first embedded

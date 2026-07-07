@@ -43,6 +43,23 @@ final class SkeletonFileCodecTests: XCTestCase {
         XCTAssertEqual(pairStrings(loaded.symmetryNames), ["left_eye->right_eye"])
     }
 
+    func testStandaloneJsonpickleNodeRefsResolveLinkEmbeddedDefinitions() throws {
+        let data = try JSONSerialization.data(
+            withJSONObject: standaloneJsonpickleSkeletonDict(),
+            options: [.sortedKeys]
+        )
+        let url = tempURL(extension: "json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try data.write(to: url)
+
+        let loaded = try SkeletonFileCodec.loadSkeleton(from: url)
+
+        XCTAssertEqual(loaded.nodeNames, ["head", "body", "left_eye", "right_eye"])
+        XCTAssertFalse(loaded.nodeNames.contains("unknown"))
+        XCTAssertEqual(pairStrings(loaded.edgeNames), ["head->body"])
+        XCTAssertEqual(pairStrings(loaded.symmetryNames), ["left_eye->right_eye"])
+    }
+
     func testYAMLIsExplicitlyUnsupported() throws {
         let url = tempURL(extension: "yaml")
 
@@ -73,5 +90,56 @@ final class SkeletonFileCodecTests: XCTestCase {
     private func tempURL(extension ext: String) -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("sleap_skeleton_codec_\(UUID().uuidString).\(ext)")
+    }
+
+    private func standaloneJsonpickleSkeletonDict() -> [String: Any] {
+        [
+            "directed": true,
+            "multigraph": true,
+            "graph": [
+                "name": "animal",
+                "symmetries": []
+            ],
+            "nodes": [
+                ["id": ["py/id": 10]],
+                ["id": ["py/id": 11]],
+                ["id": ["py/id": 12]],
+                ["id": ["py/id": 13]]
+            ],
+            "links": [
+                [
+                    "source": nodeDefinition(id: 10, name: "head"),
+                    "target": nodeDefinition(id: 11, name: "body"),
+                    "key": 0,
+                    "type": [
+                        "py/reduce": [
+                            ["py/type": "sleap.skeleton.EdgeType"],
+                            ["py/tuple": [1]]
+                        ]
+                    ]
+                ],
+                [
+                    "source": nodeDefinition(id: 12, name: "left_eye"),
+                    "target": nodeDefinition(id: 13, name: "right_eye"),
+                    "key": 0,
+                    "type": [
+                        "py/reduce": [
+                            ["py/type": "sleap.skeleton.EdgeType"],
+                            ["py/tuple": [2]]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    }
+
+    private func nodeDefinition(id: Int, name: String) -> [String: Any] {
+        [
+            "py/id": id,
+            "py/object": "sleap.skeleton.Node",
+            "py/state": [
+                "py/tuple": [name, 1.0]
+            ]
+        ]
     }
 }

@@ -387,9 +387,6 @@ public struct SLPReader {
             frames.append(frame)
         }
 
-        if total > 0 {
-            progress?(1.0)
-        }
         return frames
     }
 

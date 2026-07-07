@@ -55,6 +55,23 @@ public struct SkeletonCodec {
         var orderedNodes: [Node] = []
         let context = DecodeContext()
 
+        let linksSource = graphDict["links"] ?? graph["links"]
+        if let links = linksSource as? [[String: Any]] {
+            // Standalone skeleton.json files can list top-level nodes as
+            // {"id": {"py/id": N}} while defining Node objects in links.
+            // Register those definitions before resolving the nodes array.
+            for link in links {
+                for key in ["source", "target"] {
+                    if let nodeData = link[key] as? [String: Any] {
+                        let nodeName = extractNodeName(from: nodeData, nodeNames: nodeNames, context: context)
+                        if nodeName != "unknown" {
+                            context.registerNodeName(nodeName, from: nodeData)
+                        }
+                    }
+                }
+            }
+        }
+
         let nodesSource = graphDict["nodes"] ?? graph["nodes"]
         if let nodesData = nodesSource as? [[String: Any]] {
             for nodeData in nodesData {
@@ -85,7 +102,6 @@ public struct SkeletonCodec {
         context.registerEdgeTypes(in: graph)
 
         // Parse body edges and symmetry links — look in graphDict first
-        let linksSource = graphDict["links"] ?? graph["links"]
         if let links = linksSource as? [[String: Any]] {
             for link in links {
                 let srcName: String
@@ -193,19 +209,20 @@ public struct SkeletonCodec {
 
     private final class DecodeContext {
         private var nextImplicitID = 0
-        private var nodeNamesByPyID: [Int: String] = [:]
+        private var explicitNodeNamesByPyID: [Int: String] = [:]
+        private var positionalNodeNamesByPyID: [Int: String] = [:]
         private var edgeTypeValuesByPyID: [Int: Int] = [:]
 
         func registerNodeName(_ name: String, from dict: [String: Any]) {
             if let id = explicitPyID(in: dict) {
-                nodeNamesByPyID[id] = name
+                explicitNodeNamesByPyID[id] = name
             }
-            nodeNamesByPyID[nextImplicitID] = name
+            positionalNodeNamesByPyID[nextImplicitID] = name
             nextImplicitID += 1
         }
 
         func nodeName(forPyID id: Int) -> String? {
-            nodeNamesByPyID[id]
+            explicitNodeNamesByPyID[id] ?? positionalNodeNamesByPyID[id]
         }
 
         func registerEdgeTypes(in value: Any) {
@@ -227,7 +244,7 @@ public struct SkeletonCodec {
             }
             if let dict = value as? [String: Any] {
                 if dict.count == 1, let id = explicitPyID(in: dict) {
-                    return edgeTypeValuesByPyID[id]
+                    return edgeTypeValuesByPyID[id] ?? id
                 }
                 if let raw = dict["value"] ?? dict["_value_"] ?? dict["val"],
                    let resolved = resolveEdgeTypeValue(raw) {
@@ -285,7 +302,7 @@ public struct SkeletonCodec {
             }
             if let dict = value as? [String: Any] {
                 if dict.count == 1, let id = explicitPyID(in: dict) {
-                    return edgeTypeValuesByPyID[id]
+                    return edgeTypeValuesByPyID[id] ?? id
                 }
                 for key in ["value", "_value_", "val", "py/reduce", "py/state"] {
                     if let child = dict[key], let resolved = firstEdgeTypeValue(in: child) {
@@ -336,6 +353,11 @@ public struct SkeletonCodec {
             return name
         }
         if let state = dict["py/state"] as? [String: Any],
+           let tuple = state["py/tuple"] as? [Any],
+           let name = tuple.first as? String {
+            return name
+        }
+        if let state = dict["py/state"] as? [String: Any],
            let name = state["name"] as? String {
             return name
         }
@@ -346,6 +368,17 @@ public struct SkeletonCodec {
         // top-level superset node list by index.
         if let id = dict["id"] as? Int, id >= 0, id < nodeNames.count {
             return nodeNames[id]
+        }
+        if let idDict = dict["id"] as? [String: Any],
+           let pyID = idDict["py/id"] as? Int,
+           let name = context?.nodeName(forPyID: pyID) {
+            return name
+        }
+        if let idDict = dict["id"] as? [String: Any],
+           let pyIDString = idDict["py/id"] as? String,
+           let pyID = Int(pyIDString),
+           let name = context?.nodeName(forPyID: pyID) {
+            return name
         }
         if let id = dict["id"] as? String {
             return id

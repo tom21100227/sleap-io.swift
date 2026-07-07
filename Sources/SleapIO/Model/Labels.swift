@@ -372,7 +372,7 @@ public final class Labels: @unchecked Sendable {
 
         var collector = ErrorCollector()
         for incoming in other.skeletons {
-            if !_skeletons.contains(where: { $0.matches(incoming) }) {
+            if !_skeletons.isEmpty && !_skeletons.contains(where: { $0.matches(incoming) }) {
                 let error = RecoverableSleapError.skeletonMismatch(
                     expected: _skeletons.flatMap(\.nodeNames),
                     found: incoming.nodeNames

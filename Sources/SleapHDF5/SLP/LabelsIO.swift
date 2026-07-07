@@ -7,13 +7,9 @@ extension Labels {
 
     /// Load labels from a file. Format is inferred from extension.
     /// For `.slp` files, this uses lazy loading by default.
-    /// `errorMode` is reserved for recoverable load paths; SLP lazy loading
-    /// currently has no recoverable errors to collect.
     public static func load(from url: URL,
-                            format: FileFormat? = nil,
-                            errorMode: ErrorMode = .ignore) async throws -> Labels {
+                            format: FileFormat? = nil) async throws -> Labels {
         let resolvedFormat = try format ?? inferLoadFormat(from: url)
-        _ = errorMode
 
         switch resolvedFormat {
         case .slp:
@@ -41,14 +37,10 @@ extension Labels {
     }
 
     /// Load labels eagerly (all frames materialized).
-    /// `errorMode` is reserved for recoverable load paths; eager SLP loading
-    /// currently has no recoverable errors to collect.
     public static func loadEager(from url: URL,
                                  format: FileFormat? = nil,
-                                 errorMode: ErrorMode = .ignore,
                                  progress: ProgressReporter? = nil) async throws -> Labels {
         let resolvedFormat = try format ?? inferLoadFormat(from: url)
-        _ = errorMode
 
         switch resolvedFormat {
         case .slp:

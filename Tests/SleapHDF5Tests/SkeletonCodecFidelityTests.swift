@@ -15,6 +15,18 @@ final class SkeletonCodecFidelityTests: XCTestCase {
         XCTAssertEqual(pairStrings(skeleton.symmetryNames), ["left_wing->right_wing"])
     }
 
+    func testEmbeddedBareEdgeTypeIDPreservesSecondSymmetryLink() throws {
+        let dict = twoSymmetryEmbeddedSkeletonDict()
+
+        let skeleton = try SkeletonCodec.decodeFromNetworkX(dict)
+
+        XCTAssertEqual(pairStrings(skeleton.edgeNames), [])
+        XCTAssertEqual(
+            pairStrings(skeleton.symmetryNames),
+            ["left_eye->right_eye", "left_wing->right_wing"]
+        )
+    }
+
     func testDecodeEncodeDecodePreservesTopology() throws {
         let decoded = try SkeletonCodec.decodeFromNetworkX(pythonStyleSkeletonDict())
 
@@ -80,6 +92,54 @@ final class SkeletonCodecFidelityTests: XCTestCase {
                             ["py/tuple": [2]]
                         ]
                     ]
+                ]
+            ]
+        ]
+    }
+
+    private func twoSymmetryEmbeddedSkeletonDict() -> [String: Any] {
+        [
+            "directed": true,
+            "multigraph": true,
+            "graph": [
+                "name": "fly",
+                "symmetries": []
+            ],
+            "nodes": [
+                [
+                    "py/id": 10,
+                    "py/state": ["name": "left_eye", "weight": 1.0]
+                ],
+                [
+                    "py/id": 11,
+                    "py/state": ["name": "right_eye", "weight": 1.0]
+                ],
+                [
+                    "py/id": 12,
+                    "py/state": ["name": "left_wing", "weight": 1.0]
+                ],
+                [
+                    "py/id": 13,
+                    "py/state": ["name": "right_wing", "weight": 1.0]
+                ]
+            ],
+            "links": [
+                [
+                    "source": ["py/id": 10],
+                    "target": ["py/id": 11],
+                    "key": 0,
+                    "type": [
+                        "py/reduce": [
+                            ["py/type": "sleap.skeleton.EdgeType"],
+                            ["py/tuple": [2]]
+                        ]
+                    ]
+                ],
+                [
+                    "source": ["py/id": 12],
+                    "target": ["py/id": 13],
+                    "key": 0,
+                    "type": ["py/id": 2]
                 ]
             ]
         ]

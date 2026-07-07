@@ -70,6 +70,18 @@ final class ErrorModePlumbingTests: XCTestCase {
         XCTAssertEqual(base.frameCount, 1)
     }
 
+    func testStrictMergeIntoEmptyLabelsAcceptsFirstSkeleton() throws {
+        let incoming = skeleton("incoming", ["head", "abdomen"])
+        let base = Labels()
+        let other = labels(skeletons: [incoming], frameSkeleton: incoming)
+
+        let warnings = try base.merge(from: other, errorMode: .strict)
+
+        XCTAssertEqual(warnings, [])
+        XCTAssertEqual(base.skeletons.count, 1)
+        XCTAssertEqual(base.frameCount, 1)
+    }
+
     func testCompatibleSkeletonsReturnNoWarningsInAllModes() throws {
         for mode in [ErrorMode.strict, .warn, .ignore] {
             let local = skeleton("local", ["head", "thorax"])

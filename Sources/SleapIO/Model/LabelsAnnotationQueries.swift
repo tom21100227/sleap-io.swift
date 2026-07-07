@@ -68,7 +68,8 @@ extension Labels {
 
     private func resolvedVideoIndex(_ video: Video?) -> Int?? {
         guard let video else { return .some(nil) }
-        guard let index = videos.firstIndex(where: { $0 === video }) else { return nil }
+        guard let resolved = resolveVideo(video),
+              let index = videos.firstIndex(where: { $0 === resolved }) else { return nil }
         return .some(index)
     }
 }
