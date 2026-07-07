@@ -554,7 +554,13 @@ public struct SLPReader {
 
         var sessions: [RecordingSession] = []
         for str in strings {
-            guard let data = str.data(using: .utf8),
+            // Python's `write_sessions` uses `json.dumps(allow_nan=True)`, so a
+            // partially-triangulated Instance3D (occluded nodes → NaN points, the
+            // normal case) yields bare `NaN`/`Infinity` tokens that
+            // `JSONSerialization` rejects. Rewrite them to `null` before parsing so
+            // the file loads (NaN → missing point / nil score).
+            let sanitized = SessionSchema.sanitizeNonFiniteJSON(str)
+            guard let data = sanitized.data(using: .utf8),
                   let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
             }

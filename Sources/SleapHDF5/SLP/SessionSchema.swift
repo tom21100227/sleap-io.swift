@@ -18,8 +18,9 @@ import SleapIO
 ///     index to a `[labeledFrameIdx, instanceIdx]` pair, plus an optional
 ///     `frame_idx`. When an ``InstanceGroup`` carries a triangulated
 ///     ``Instance3D``, that pose is additionally persisted under the additive
-///     `points` (per-node `[x,y,z]` rows or `null`) and optional `score` keys;
-///     readers that don't model 3D poses simply ignore them.
+///     `points` (per-node `[x,y,z]` rows or `null`) and optional
+///     `instance_3d_score` keys; readers that don't model 3D poses simply ignore
+///     them.
 ///
 /// For back-compat with the older bespoke schema (and readers that only model
 /// it), ``sessionDict(_:orderedCameras:videoIndexMap:labeledFrameToIdx:instanceToLfInst:)``
@@ -158,8 +159,14 @@ enum SessionSchema {
             // this key simply ignore it.
             if let instance3D = instanceGroup.instance3D {
                 dict["points"] = points3DArray(instance3D)
-                if let score = instance3D.score {
-                    dict["score"] = Double(score)
+                // Python serializes the Instance3D's own reconstruction score under
+                // `instance_3d_score` (the top-level `score` key belongs to the
+                // InstanceGroup itself). Guard `.isFinite`: `JSONSerialization`
+                // throws an *uncatchable* ObjC exception on NaN/Infinity, which
+                // would crash the entire save. An omitted score round-trips as
+                // `nil`, matching a missing key.
+                if let score = instance3D.score, score.isFinite {
+                    dict["instance_3d_score"] = Double(score)
                 }
             }
             result.append(dict)
@@ -321,7 +328,7 @@ enum SessionSchema {
     }
 
     /// Reconstruct an ``Instance3D`` from the additive `points` (and optional
-    /// `score`) keys written by ``points3DArray(_:)``.
+    /// `instance_3d_score`) keys written by ``points3DArray(_:)``.
     ///
     /// The skeleton and node order are taken from the group's already-decoded 2D
     /// instances. A `null` (or malformed) row decodes to a missing point. Does
@@ -346,8 +353,87 @@ enum SessionSchema {
             }
         }
         let instance3D = Instance3D(skeleton: skeleton, points: points)
-        if let score = doubleValue(dict["score"]) { instance3D.score = Float(score) }
+        if let score = doubleValue(dict["instance_3d_score"]) { instance3D.score = Float(score) }
         instanceGroup.instance3D = instance3D
+    }
+
+    // MARK: - Non-finite JSON sanitizing (read)
+
+    /// Replace bare non-finite JSON tokens (`NaN`, `Infinity`, `-Infinity`, and the
+    /// `+Infinity` variant) with `null` so `Foundation`'s `JSONSerialization` can
+    /// parse a Python `json.dumps(allow_nan=True)` string.
+    ///
+    /// Python's `write_sessions` emits `sessions_json` with bare `NaN`/`Infinity`
+    /// tokens for the NaN coordinates of a partially-triangulated ``Instance3D``
+    /// (occluded nodes — the normal case). `JSONSerialization` rejects those tokens
+    /// and would throw, failing the *entire* label load. Rewriting them to `null`
+    /// lets the file load; a `null` point row decodes to a missing point (and a
+    /// `null` score to `nil`).
+    ///
+    /// The scan tracks string state (honoring backslash escapes) so a string value
+    /// like `"NaN sensor"` is left untouched — only tokens outside string literals,
+    /// i.e. JSON value positions, are rewritten.
+    static func sanitizeNonFiniteJSON(_ json: String) -> String {
+        // Fast path: `-Infinity`/`+Infinity` both contain "Infinity".
+        guard json.contains("NaN") || json.contains("Infinity") else { return json }
+
+        let scalars = Array(json.unicodeScalars)
+        let n = scalars.count
+        var out = String.UnicodeScalarView()
+        out.reserveCapacity(n)
+
+        var i = 0
+        var inString = false
+        while i < n {
+            let c = scalars[i]
+            if inString {
+                out.append(c)
+                if c == "\\", i + 1 < n {
+                    // Copy the escaped scalar verbatim so an escaped quote does not
+                    // prematurely close the string.
+                    out.append(scalars[i + 1])
+                    i += 2
+                    continue
+                }
+                if c == "\"" { inString = false }
+                i += 1
+                continue
+            }
+            if c == "\"" {
+                inString = true
+                out.append(c)
+                i += 1
+                continue
+            }
+            if let length = matchNonFiniteToken(scalars, at: i) {
+                out.append(contentsOf: "null".unicodeScalars)
+                i += length
+                continue
+            }
+            out.append(c)
+            i += 1
+        }
+        return String(out)
+    }
+
+    /// Length of a bare non-finite token starting at `i` (outside a string), or
+    /// `nil`. Matches `NaN` (3), `Infinity`/`+Infinity`/`-Infinity` (8/9). The
+    /// signed forms only match the full `±Infinity` literal, so a negative number
+    /// like `-3` is never mistaken for a token.
+    private static func matchNonFiniteToken(_ scalars: [Unicode.Scalar], at i: Int) -> Int? {
+        func matches(_ token: String) -> Bool {
+            let t = Array(token.unicodeScalars)
+            guard i + t.count <= scalars.count else { return false }
+            for k in 0..<t.count where scalars[i + k] != t[k] { return false }
+            return true
+        }
+        switch scalars[i] {
+        case "N": return matches("NaN") ? 3 : nil
+        case "I": return matches("Infinity") ? 8 : nil
+        case "-": return matches("-Infinity") ? 9 : nil
+        case "+": return matches("+Infinity") ? 9 : nil
+        default: return nil
+        }
     }
 
     // MARK: - JSON coercion helpers

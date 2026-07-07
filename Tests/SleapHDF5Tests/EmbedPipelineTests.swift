@@ -291,6 +291,109 @@ final class EmbedPipelineTests: XCTestCase {
         XCTAssertTrue(list.isEmpty, "frames of a video not in labels.videos are skipped")
     }
 
+    /// Build a Labels with one user frame (idx 1), one predicted-only frame
+    /// (idx 3), and one suggestion (idx 7) over a single synthetic-backed video.
+    private func makeLabelsWithPredictedOnlyFrame(
+        backend: SyntheticVideoBackend
+    ) -> Labels {
+        let skeleton = Skeleton(name: "fly", nodes: [Node(name: "head"), Node(name: "tail")])
+        let video = Video(filename: "external.mp4", backendType: "media")
+        video.backend = backend
+        video.frameCount = backend.count
+        video.frameSize = backend.frameSize
+
+        let userFrame = LabeledFrame(
+            video: video, frameIndex: 1,
+            instances: [Instance(skeleton: skeleton, points: PointsArray(points: [
+                Point(x: 1, y: 2, visible: true, complete: true),
+                Point(x: 3, y: 4, visible: true, complete: true),
+            ]))])
+        let predPoints = PredictedPointsArray(points: [
+            PredictedPoint(point: Point(x: 5, y: 6, visible: true, complete: true), score: 0.9),
+            PredictedPoint(point: Point(x: 7, y: 8, visible: true, complete: true), score: 0.8),
+        ])
+        let predFrame = LabeledFrame(
+            video: video, frameIndex: 3,
+            instances: [PredictedInstance(skeleton: skeleton, points: predPoints, score: 0.85)])
+
+        return Labels(
+            frameStore: EagerFrameStore(frames: [userFrame, predFrame]),
+            videos: [video], skeletons: [skeleton], tracks: [],
+            suggestions: [SuggestionFrame(video: video, frameIndex: 7)])
+    }
+
+    /// Fable MAJOR 5: Python `embed="all"` embeds *every* labeled frame including
+    /// predicted-only ones, unlike `"user+suggestions"`.
+    func testEmbedAllIncludesPredictedOnlyFrames() {
+        let labels = makeLabelsWithPredictedOnlyFrame(backend: SyntheticVideoBackend())
+
+        let all = EmbedPipeline.frameSelection(labels: labels, embed: .all)
+        XCTAssertEqual(all[0] ?? [], [1, 3, 7],
+                       "embed=all must include the predicted-only frame 3")
+
+        let userAndSuggestions = EmbedPipeline.frameSelection(
+            labels: labels, embed: .userAndSuggestions)
+        XCTAssertEqual(userAndSuggestions[0] ?? [], [1, 7],
+                       "embed=user+suggestions must exclude the predicted-only frame 3")
+
+        let user = EmbedPipeline.frameSelection(labels: labels, embed: .user)
+        XCTAssertEqual(user[0] ?? [], [1])
+    }
+
+    // MARK: - Embed wiring through the public Labels.save API (Fable MAJOR 3 + 4)
+
+    func testEmbedViaLabelsSaveExplicitSelection() async throws {
+        let backend = SyntheticVideoBackend()
+        let (labels, _) = makeLabels(userFrames: [1, 4], suggestionFrames: [7], backend: backend)
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        // The public API forwards `embed:` + `options.embeddedImageFormat` to the writer.
+        try await labels.save(
+            to: outputURL,
+            options: SaveOptions(embeddedImageFormat: .png),
+            embed: .all)
+
+        let reloaded = try await Labels.load(from: outputURL)
+        reloaded.materialize()
+        XCTAssertTrue(reloaded.hasEmbeddedVideo, "Labels.save(embed:.all) must embed frames")
+        let embedded = try XCTUnwrap(reloaded.videos[0].backend as? SleapHDF5EmbeddedVideoBackend)
+        XCTAssertEqual(Set(embedded.embeddedFrames.keys), Set([1, 4, 7]))
+    }
+
+    func testEmbedViaLabelsSaveEmbedFramesBoolMapsToAll() async throws {
+        let backend = SyntheticVideoBackend()
+        let (labels, _) = makeLabels(userFrames: [1, 4], suggestionFrames: [7], backend: backend)
+
+        let outputURL = tempURL()
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        // Legacy cross-module bool: embedFrames == true maps to EmbedSelection.all.
+        try await labels.save(
+            to: outputURL,
+            options: SaveOptions(embedFrames: true, embeddedImageFormat: .png))
+
+        let reloaded = try await Labels.load(from: outputURL)
+        reloaded.materialize()
+        XCTAssertTrue(reloaded.hasEmbeddedVideo,
+                      "SaveOptions.embedFrames == true must embed frames via Labels.save")
+        let embedded = try XCTUnwrap(reloaded.videos[0].backend as? SleapHDF5EmbeddedVideoBackend)
+        XCTAssertEqual(Set(embedded.embeddedFrames.keys), Set([1, 4, 7]))
+    }
+
+    func testEmbedViaLabelsSaveDefaultDoesNotEmbed() async throws {
+        let backend = SyntheticVideoBackend()
+        let (labels, _) = makeLabels(userFrames: [1], suggestionFrames: [], backend: backend)
+
+        let outputURL = tempURL(extension: "slp")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        try await labels.save(to: outputURL)  // default embed == .none, embedFrames == false
+
+        let reloaded = try await Labels.load(from: outputURL)
+        reloaded.materialize()
+        XCTAssertFalse(reloaded.hasEmbeddedVideo,
+                       "default Labels.save must not embed frames")
+    }
+
     // MARK: - No-embed default leaves the external video unchanged
 
     func testEmbedNoneKeepsExternalVideo() async throws {

@@ -211,4 +211,142 @@ final class FrameGroupSerializationTests: XCTestCase {
             XCTAssertEqual(restored3D.points[i].z, triangulated.points[i].z, accuracy: 1e-4)
         }
     }
+
+    // MARK: - Score serialization: key + non-finite guard (Fable BLOCKER 1 / MAJOR 6)
+
+    /// The Instance3D score is written under `instance_3d_score` (Python's key),
+    /// never the InstanceGroup-owned `score`.
+    func testInstance3DScoreUsesInstance3DScoreKey() throws {
+        let fixture = makeSessionFixture()
+        let skeleton = fixture.frames[0].instances[0].skeleton
+        fixture.session.frameGroups[0].instanceGroups[0].instance3D = Instance3D(
+            skeleton: skeleton,
+            points: [Point3D(x: 1, y: 2, z: 3, visible: true), .missing],
+            score: 0.42)
+
+        let ordered = SessionSchema.orderedCameras(for: fixture.session)
+        let dict = SessionSchema.sessionDict(
+            fixture.session,
+            orderedCameras: ordered,
+            videoIndexMap: fixture.videoIndexMap,
+            labeledFrameToIdx: fixture.labeledFrameToIdx,
+            instanceToLfInst: fixture.instanceToLfInst)
+
+        let ig = try XCTUnwrap(
+            (dict["frame_group_dicts"] as? [[String: Any]])?.first?["instance_groups"]
+                as? [[String: Any]])
+        XCTAssertEqual((ig[0]["instance_3d_score"] as? Double) ?? .nan, 0.42, accuracy: 1e-6)
+        XCTAssertNil(ig[0]["score"], "Instance3D score must not use the InstanceGroup `score` key")
+    }
+
+    /// A NaN (or Infinity) Instance3D score must not be serialized: `JSONSerialization`
+    /// throws an uncatchable ObjC exception on non-finite numbers, which would crash
+    /// the whole save. It is simply omitted (round-trips as `nil`).
+    func testInstance3DNaNScoreIsOmittedAndDoesNotCrashSave() throws {
+        let fixture = makeSessionFixture()
+        let skeleton = fixture.frames[0].instances[0].skeleton
+        fixture.session.frameGroups[0].instanceGroups[0].instance3D = Instance3D(
+            skeleton: skeleton,
+            points: [Point3D(x: 1, y: 2, z: 3, visible: true), .missing],
+            score: .nan)
+
+        let ordered = SessionSchema.orderedCameras(for: fixture.session)
+        let dict = SessionSchema.sessionDict(
+            fixture.session,
+            orderedCameras: ordered,
+            videoIndexMap: fixture.videoIndexMap,
+            labeledFrameToIdx: fixture.labeledFrameToIdx,
+            instanceToLfInst: fixture.instanceToLfInst)
+
+        // The write path a real save uses must not throw on the NaN score.
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]))
+
+        let ig = try XCTUnwrap(
+            (dict["frame_group_dicts"] as? [[String: Any]])?.first?["instance_groups"]
+                as? [[String: Any]])
+        XCTAssertNil(ig[0]["instance_3d_score"], "NaN score must be omitted")
+
+        // Round-trips: score comes back nil, the visible/missing points are intact.
+        let decoded = try jsonRoundTrip(dict)
+        let restored = SessionSchema.makeSession(
+            from: decoded, videos: fixture.videos, videoIdMap: [:], frames: fixture.frames)
+        let restored3D = try XCTUnwrap(
+            restored.frameGroups.first?.instanceGroups.first?.instance3D)
+        XCTAssertNil(restored3D.score)
+        XCTAssertTrue(restored3D.points[0].visible)
+        XCTAssertFalse(restored3D.points[1].visible)
+    }
+
+    // MARK: - Non-finite JSON tolerance on load (Fable BLOCKER 2)
+
+    /// A real Python `sessions_json` string carries bare `NaN`/`Infinity` tokens
+    /// (from `json.dumps(allow_nan=True)`) for occluded 3D points — the normal
+    /// case. It must load: the tokens are sanitized to `null`, so NaN points decode
+    /// to missing and a NaN score to `nil`, instead of failing the entire load.
+    func testSessionJSONWithBareNaNLoads() throws {
+        let fixture = makeSessionFixture()
+        // Hand-written to mirror Python: bare NaN in the second point row and in
+        // the score. The first row is finite and must survive.
+        let json = """
+        {
+          "calibration": {
+            "cam_0": {"name": "camA", "size": [1280, 720], "matrix": null, "distortions": null, "rotation": null, "translation": null},
+            "cam_1": {"name": "camB", "size": [1280, 720], "matrix": null, "distortions": null, "rotation": null, "translation": null},
+            "metadata": {}
+          },
+          "camcorder_to_video_idx_map": {"0": 0, "1": 1},
+          "frame_group_dicts": [
+            {
+              "frame_idx": 0,
+              "instance_groups": [
+                {
+                  "camcorder_to_lf_and_inst_idx_map": {"0": [0, 0], "1": [1, 0]},
+                  "points": [[1.5, 2.5, 3.5], [NaN, NaN, NaN]],
+                  "instance_3d_score": NaN
+                }
+              ]
+            }
+          ]
+        }
+        """
+
+        // Raw parse rejects the bare NaN (proving the sanitizer is what saves us).
+        XCTAssertThrowsError(
+            try JSONSerialization.jsonObject(with: XCTUnwrap(json.data(using: .utf8))))
+
+        let sanitized = SessionSchema.sanitizeNonFiniteJSON(json)
+        let data = try XCTUnwrap(sanitized.data(using: .utf8))
+        let dict = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        let restored = SessionSchema.makeSession(
+            from: dict, videos: fixture.videos, videoIdMap: [:], frames: fixture.frames)
+        let restored3D = try XCTUnwrap(
+            restored.frameGroups.first?.instanceGroups.first?.instance3D)
+        XCTAssertEqual(restored3D.points.count, 2)
+        XCTAssertTrue(restored3D.points[0].visible)
+        XCTAssertEqual(restored3D.points[0].x, 1.5, accuracy: 1e-5)
+        XCTAssertFalse(restored3D.points[1].visible, "NaN point row must decode to missing")
+        XCTAssertNil(restored3D.score, "NaN score must decode to nil")
+    }
+
+    /// The sanitizer only touches value-position tokens — a string literal that
+    /// happens to contain "NaN" is left byte-for-byte intact.
+    func testSanitizeNonFiniteJSONPreservesStringLiterals() throws {
+        let input = #"{"name":"NaN camera","x":NaN,"y":-Infinity,"z":Infinity}"#
+        let out = SessionSchema.sanitizeNonFiniteJSON(input)
+        XCTAssertEqual(out, #"{"name":"NaN camera","x":null,"y":null,"z":null}"#)
+
+        let obj = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: XCTUnwrap(out.data(using: .utf8)))
+                as? [String: Any])
+        XCTAssertEqual(obj["name"] as? String, "NaN camera")
+        XCTAssertTrue(obj["x"] is NSNull)
+    }
+
+    /// A finite session (no non-finite tokens) is returned unchanged (fast path).
+    func testSanitizeNonFiniteJSONNoOpOnFiniteInput() {
+        let input = #"{"points":[[1.0,2.0,3.0]],"instance_3d_score":0.5}"#
+        XCTAssertEqual(SessionSchema.sanitizeNonFiniteJSON(input), input)
+    }
 }

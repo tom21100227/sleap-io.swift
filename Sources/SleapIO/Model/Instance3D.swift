@@ -43,7 +43,7 @@ public struct Point3D: Hashable, Codable, Sendable {
 /// triangulating an ``InstanceGroup``'s corresponding per-camera 2D instances
 /// (see ``InstanceGroup/triangulate(minimumViews:)``) and are indexed
 /// positionally by node, matching the owning ``skeleton``'s node order.
-public final class Instance3D: Hashable, @unchecked Sendable {
+public class Instance3D: Hashable, @unchecked Sendable {
     /// The skeleton defining the landmark topology and node order.
     public var skeleton: Skeleton
 

@@ -104,16 +104,39 @@ extension Labels {
     }
 
     /// Save labels to a file. Format is inferred from extension.
+    ///
+    /// - Parameter embed: Which frames, if any, to embed as image data when saving
+    ///   an SLP file (mirrors Python sleap-io's `embed=` argument). Defaults to
+    ///   ``SleapHDF5/EmbedSelection/none``. When left at `.none`, the legacy
+    ///   cross-module `SaveOptions.embedFrames` bool is honored as a convenience:
+    ///   `embedFrames == true` maps to ``SleapHDF5/EmbedSelection/all`` (Python's
+    ///   `embed=True`). An explicit `embed` argument always wins. Embedded frames
+    ///   are re-encoded with `options.embeddedImageFormat`. Ignored for non-SLP
+    ///   formats.
     public func save(to url: URL,
                      format: FileFormat? = nil,
                      options: SaveOptions = .defaults,
+                     embed: EmbedSelection = .none,
                      progress: ProgressReporter? = nil) async throws {
         let resolvedFormat = try format ?? Labels.inferSaveFormat(from: url)
 
         switch resolvedFormat {
         case .slp:
             stampSleapIOVersion()
-            try await SLPWriter.write(self, to: url.path, progress: progress)
+            // Reconcile the two embed surfaces into one coherent selection:
+            // an explicit `embed` wins; otherwise the cross-module
+            // `SaveOptions.embedFrames` bool maps to `.all` (Python's `embed=True`).
+            let resolvedEmbed: EmbedSelection
+            if case .none = embed, options.embedFrames {
+                resolvedEmbed = .all
+            } else {
+                resolvedEmbed = embed
+            }
+            try await SLPWriter.write(
+                self, to: url.path,
+                embed: resolvedEmbed,
+                imageFormat: options.embeddedImageFormat,
+                progress: progress)
         case .cocoJSON:
             try COCOCodec.write(self, to: url.path)
         case .csv:

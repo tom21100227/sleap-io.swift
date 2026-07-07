@@ -38,8 +38,10 @@ public enum EmbedSelection: Sendable {
     /// Do not embed. External videos stay referenced by path; already-embedded
     /// videos are preserved verbatim. This is the writer's historical behavior.
     case none
-    /// All user-labeled frames plus suggestion frames. Mirrors Python
-    /// `embed="all"` / `embed=True`, both of which alias `"user+suggestions"`.
+    /// Every labeled frame (user *and* predicted-only) plus suggestion frames.
+    /// Mirrors Python `embed="all"` / `embed=True`, which embed all
+    /// `Labels.labeled_frames` and suggestions — a strict superset of
+    /// ``userAndSuggestions`` (it additionally includes predicted-only frames).
     case all
     /// Frames that contain at least one user (non-predicted) instance. Mirrors
     /// Python `embed="user"`.
@@ -136,8 +138,15 @@ enum EmbedPipeline {
             pairs = labels.userLabeledFrames.map { (video: $0.video, frameIndex: $0.frameIndex) }
         case .suggestions:
             pairs = labels.suggestions.map { (video: $0.video, frameIndex: $0.frameIndex) }
-        case .all, .userAndSuggestions:
-            // Python aliases `"all"`/`True` to `"user+suggestions"`.
+        case .all:
+            // Python `embed="all"`/`True` embeds *every* labeled frame (including
+            // predicted-only frames) plus suggestions — not just user frames.
+            pairs = (0..<labels.frameCount).map { labels[$0] }
+                .map { (video: $0.video, frameIndex: $0.frameIndex) }
+            pairs += labels.suggestions.map { (video: $0.video, frameIndex: $0.frameIndex) }
+        case .userAndSuggestions:
+            // Python `embed="user+suggestions"`: user-labeled frames only (drops
+            // predicted-only frames), plus suggestions.
             pairs = labels.userLabeledFrames.map { (video: $0.video, frameIndex: $0.frameIndex) }
             pairs += labels.suggestions.map { (video: $0.video, frameIndex: $0.frameIndex) }
         case .list(let list):
@@ -172,7 +181,7 @@ enum EmbedPipeline {
         labels: Labels,
         embed: EmbedSelection,
         imageFormat: SaveOptions.EmbeddedImageFormat,
-        progress: ProgressReporter?
+        progress: ProgressReporter? = nil
     ) async throws -> EmbedPlan {
         if case .none = embed { return .empty }
 
