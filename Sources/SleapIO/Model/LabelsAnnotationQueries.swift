@@ -12,18 +12,26 @@ import Foundation
 /// honest rather than introducing speculative model types.
 extension Labels {
 
-    /// All labels-level regions of interest.
+    /// Labels-level regions of interest, optionally filtered by video and/or frame index.
     ///
     /// - Returns: The contents of ``Labels/rois``.
-    public func getRois() -> [ROI] {
-        rois
+    public func getRois(video: Video? = nil, frameIndex: Int? = nil) -> [ROI] {
+        guard let videoIndex = resolvedVideoIndex(video) else { return [] }
+        return rois.filter { roi in
+            (videoIndex == nil || roi.videoIndex == videoIndex)
+            && (frameIndex == nil || roi.frameIndex == frameIndex)
+        }
     }
 
-    /// All labels-level segmentation masks.
+    /// Labels-level segmentation masks, optionally filtered by video and/or frame index.
     ///
     /// - Returns: The contents of ``Labels/masks``.
-    public func getMasks() -> [SegmentationMask] {
-        masks
+    public func getMasks(video: Video? = nil, frameIndex: Int? = nil) -> [SegmentationMask] {
+        guard let videoIndex = resolvedVideoIndex(video) else { return [] }
+        return masks.filter { mask in
+            (videoIndex == nil || mask.videoIndex == videoIndex)
+            && (frameIndex == nil || mask.frameIndex == frameIndex)
+        }
     }
 
     /// Bounding boxes for the dataset.
@@ -56,5 +64,11 @@ extension Labels {
     /// - Returns: An empty array (placeholder pending E7).
     public func getLabelImages() -> [Int] {
         []
+    }
+
+    private func resolvedVideoIndex(_ video: Video?) -> Int?? {
+        guard let video else { return .some(nil) }
+        guard let index = videos.firstIndex(where: { $0 === video }) else { return nil }
+        return .some(index)
     }
 }

@@ -7,6 +7,25 @@ import Foundation
 /// different identity) is resolved against the local identity table before the
 /// frame store is queried. None of these methods mutate the store.
 extension Labels {
+    /// All labeled frames for `video`, resolving foreign video objects by filename.
+    public subscript(video: Video) -> [LabeledFrame] {
+        frames(forVideoMatching: video)
+    }
+
+    /// The labeled frame at `frameIndex` for `video`, resolving foreign video objects by filename.
+    public subscript(video: Video, frameIndex: Int) -> LabeledFrame? {
+        find(video: video, frameIdx: frameIndex).first
+    }
+
+    /// Labeled frames at the given collection positions.
+    public subscript(indices: [Int]) -> [LabeledFrame] {
+        indices.map { self[$0] }
+    }
+
+    /// Labeled frames in the given collection-position range.
+    public subscript<R: RangeExpression>(range: R) -> [LabeledFrame] where R.Bound == Int {
+        range.relative(to: startIndex..<endIndex).map { self[$0] }
+    }
 
     /// Resolves a possibly-foreign `Video` to the equivalent video in this
     /// `Labels`' identity table.
