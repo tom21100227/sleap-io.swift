@@ -50,6 +50,35 @@ public final class Video: Hashable, @unchecked Sendable {
     }
 }
 
+// MARK: - Relocation (M4 / E11.2)
+//
+// Path update for video relocation, mirroring `Video.replace_filename`. The
+// pure-model ``Video`` has no decode backend (that lives in the SleapVideo
+// module), so this layer only updates the effective path and its mirror in
+// ``backendMetadata``; the SleapVideo layer performs any backend reopen/close.
+
+extension Video {
+
+    /// Update the effective ``filename`` of the video (relocation).
+    ///
+    /// Mirrors `Video.replace_filename`. The new path is stored as
+    /// ``persistedFilename`` — preserving ``originalFilename`` for provenance — and
+    /// mirrored into `backendMetadata["filename"]` so it round-trips on save.
+    ///
+    /// - Parameters:
+    ///   - newFilename: The new filesystem path for the video.
+    ///   - keepOpen: Records the caller's intent for the decode backend after the
+    ///     path change: when `true` (the default), a backend-managing layer should
+    ///     reopen against the new path; when `false`, it should close the backend
+    ///     (useful when the new path may not exist and file checks are costly).
+    ///     This pure-model layer has no backend, so the flag only records intent —
+    ///     see the SleapVideo `Video` relocation helpers for the actual open/close.
+    public func replaceFilename(_ newFilename: String, keepOpen: Bool = true) {
+        persistedFilename = newFilename
+        backendMetadata["filename"] = newFilename
+    }
+}
+
 // MARK: - Matching primitives (M2)
 //
 // Path/content/shape comparison helpers used by ``VideoMatcher`` and by
@@ -299,6 +328,16 @@ extension Video {
             return url.path
         }
         return raw
+    }
+
+    /// Whether two path strings refer to the same location after standardizing
+    /// (resolving `.`/`..` components and trailing slashes), mirroring the
+    /// upstream `Path(a) == Path(b)` comparison used by `replace_filenames`.
+    /// This is a pure string comparison and does not touch the filesystem.
+    static func pathsEqual(_ a: String, _ b: String) -> Bool {
+        let na = URL(fileURLWithPath: normalizedPath(a)).standardizedFileURL.path
+        let nb = URL(fileURLWithPath: normalizedPath(b)).standardizedFileURL.path
+        return na == nb
     }
 
     /// Read a `String` metadata value for `key`, if present.

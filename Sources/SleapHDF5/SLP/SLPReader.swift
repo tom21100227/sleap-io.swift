@@ -20,14 +20,11 @@ public struct SLPReader {
     /// `formatVersionTooNew` failure.
     ///
     /// The bounding-box (`bboxes`), centroid (`centroids`), identity
-    /// (`identities_json`), ROI (`rois`), and segmentation-mask (`masks`) tables
-    /// are now modeled and read best-effort. Only label images (epic E7 #47)
-    /// remain unmodeled: the reader never opens `label_images`, so it is skipped
-    /// by omission — no explicit branching is required. The list is retained for
-    /// documentation and to anchor the version-support tests.
-    static let unmodeledDatasetNames: [String] = [
-        "label_images"
-    ]
+    /// (`identities_json`), ROI (`rois`), segmentation-mask (`masks`) and label-image
+    /// (`label_images`) tables are now all modeled and read best-effort, so this
+    /// list is empty. It is retained for documentation and to anchor the
+    /// version-support tests.
+    static let unmodeledDatasetNames: [String] = []
 
     /// Validate an SLP `format_id` against the supported range.
     ///
@@ -160,6 +157,7 @@ public struct SLPReader {
         let identities = readIdentities(from: file)
         let bboxes = readBboxes(from: file)
         let centroids = readCentroids(from: file)
+        let labelImages = readLabelImages(from: file)
 
         // Apply pre-1.1 coordinate adjustment
         if formatId < 1.1 {
@@ -181,6 +179,7 @@ public struct SLPReader {
         labels.identities = identities
         labels.bboxes = bboxes
         labels.centroids = centroids
+        labels.labelImages = labelImages
         progress?(1.0)
         return labels
     }
@@ -831,6 +830,123 @@ public struct SLPReader {
         } catch {
             return []
         }
+    }
+
+    // MARK: - Read label images
+
+    /// Read all ``LabelImage`` annotations from the `/label_images` datasets.
+    ///
+    /// Gated on dataset presence and read best-effort (mirroring ``readBboxes`` /
+    /// ``readCentroids``): a missing or garbage table yields an empty array
+    /// rather than failing the load. Each image's dense pixel labels are sliced
+    /// out of the flat `/label_image_data` dataset one image at a time via a
+    /// hyperslab (see ``EmbeddedVideo/readInt32Region(dataset:start:count:)``), so
+    /// the whole pixel buffer is never held in memory at once.
+    ///
+    /// Video/track/instance associations are stored as raw indices; negative
+    /// sentinels decode to `nil` (matching Python `read_label_images`).
+    static func readLabelImages(from file: HDF5File) -> [LabelImage] {
+        (try? readLabelImages(from: file, indices: nil)) ?? []
+    }
+
+    /// Read a single ``LabelImage`` by index without materializing the others'
+    /// pixel data — the "lazy read of one image" path. Only the target image's
+    /// window of `/label_image_data` is transferred from disk.
+    ///
+    /// Returns `nil` when the datasets are absent/unreadable or `index` is out of
+    /// range.
+    static func readLabelImage(from file: HDF5File, at index: Int) -> LabelImage? {
+        guard index >= 0 else { return nil }
+        return (try? readLabelImages(from: file, indices: [index]))?.first
+    }
+
+    /// Shared label-image reader. When `indices` is `nil`, every image is read;
+    /// otherwise only the listed rows are materialized (used by
+    /// ``readLabelImage(from:at:)``). Each image's pixels are read via a single
+    /// hyperslab so unrequested images cost nothing beyond the small index table.
+    private static func readLabelImages(from file: HDF5File, indices: [Int]?) throws -> [LabelImage] {
+        guard file.exists(name: "label_images"),
+              file.exists(name: "label_image_data") else { return [] }
+
+        let liDs = try file.openDataset(name: "label_images")
+        let count = liDs.count
+        guard count > 0 else { return [] }
+
+        // Per-image index table (small metadata — read whole).
+        let video = try liDs.readCompoundFieldInt32(fieldName: "video", count: count)
+        let frameIdx = try liDs.readCompoundFieldInt64(fieldName: "frame_idx", count: count)
+        let height = try liDs.readCompoundFieldUInt32(fieldName: "height", count: count)
+        let width = try liDs.readCompoundFieldUInt32(fieldName: "width", count: count)
+        let nObjects = try liDs.readCompoundFieldUInt32(fieldName: "n_objects", count: count)
+        let objectsStart = try liDs.readCompoundFieldUInt32(fieldName: "objects_start", count: count)
+        let dataStart = try liDs.readCompoundFieldUInt64(fieldName: "data_start", count: count)
+        let dataEnd = try liDs.readCompoundFieldUInt64(fieldName: "data_end", count: count)
+        let sources = try readJSONListAttribute(from: liDs, name: "sources", count: count)
+
+        // Per-object metadata table (also small).
+        var objLabelID = ContiguousArray<Int32>()
+        var objTrack = ContiguousArray<Int32>()
+        var objInstance = ContiguousArray<Int32>()
+        var categories: [String] = []
+        var names: [String] = []
+        if file.exists(name: "label_image_objects") {
+            let objDs = try file.openDataset(name: "label_image_objects")
+            let objCount = objDs.count
+            if objCount > 0 {
+                objLabelID = try objDs.readCompoundFieldInt32(fieldName: "label_id", count: objCount)
+                objTrack = try objDs.readCompoundFieldInt32(fieldName: "track", count: objCount)
+                objInstance = try objDs.readCompoundFieldInt32(fieldName: "instance", count: objCount)
+                categories = try readJSONListAttribute(from: objDs, name: "categories", count: objCount)
+                names = try readJSONListAttribute(from: objDs, name: "names", count: objCount)
+            }
+        }
+
+        // The flat pixel dataset — only per-image windows are read from it.
+        let pixDs = try file.openDataset(name: "label_image_data")
+        let pixCount = pixDs.count
+
+        let targets = indices ?? Array(0..<count)
+        var result: [LabelImage] = []
+        result.reserveCapacity(targets.count)
+        for i in targets {
+            guard i >= 0, i < count else { continue }
+
+            let h = Int(height[i])
+            let w = Int(width[i])
+            let start = Int(dataStart[i])
+            let end = Int(dataEnd[i])
+            let n = end - start
+            guard start >= 0, n >= 0, start + n <= pixCount else { continue }
+
+            let pixels = try EmbeddedVideo.readInt32Region(dataset: pixDs, start: start, count: n)
+
+            // Rebuild the per-object metadata for this image.
+            var objects: [Int: LabelImage.Info] = [:]
+            let objStart = Int(objectsStart[i])
+            let objN = Int(nObjects[i])
+            for j in 0..<objN {
+                let idx = objStart + j
+                guard idx >= 0, idx < objLabelID.count else { break }
+                let labelID = Int(objLabelID[idx])
+                let track = objTrack.isEmpty ? Int32(-1) : objTrack[idx]
+                let instance = objInstance.isEmpty ? Int32(-1) : objInstance[idx]
+                objects[labelID] = LabelImage.Info(
+                    trackIndex: track >= 0 ? Int(track) : nil,
+                    category: idx < categories.count ? categories[idx] : "",
+                    name: idx < names.count ? names[idx] : "",
+                    instanceIndex: instance >= 0 ? Int(instance) : nil)
+            }
+
+            result.append(LabelImage(
+                data: pixels,
+                height: h,
+                width: w,
+                objects: objects,
+                videoIndex: video[i] >= 0 ? Int(video[i]) : nil,
+                frameIndex: frameIdx[i] >= 0 ? Int(frameIdx[i]) : nil,
+                source: i < sources.count ? sources[i] : ""))
+        }
+        return result
     }
 
     // MARK: - Helpers

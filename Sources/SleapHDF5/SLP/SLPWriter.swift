@@ -55,6 +55,7 @@ public struct SLPWriter {
         let hasBboxes = !labels.bboxes.isEmpty
         let hasCentroids = !labels.centroids.isEmpty
         let hasIdentities = !labels.identities.isEmpty
+        let hasLabelImages = !labels.labelImages.isEmpty
 
         // Stamp the minimum format version that can represent this data
         // (downgrade-on-save), so the oldest compatible SLEAP can still open it.
@@ -106,6 +107,11 @@ public struct SLPWriter {
         if hasCentroids {
             try writeCentroids(labels.centroids, file: file)
         }
+
+        // 13. Write label images
+        if hasLabelImages {
+            try writeLabelImages(labels.labelImages, file: file)
+        }
     }
 
     // MARK: - Write-version migration
@@ -125,12 +131,15 @@ public struct SLPWriter {
     ///   - **1.5**: `/rois` or `/masks` tables are present.
     ///   - **1.7**: `/bboxes` or `/centroids` tables are present (Swift port
     ///     extension; centroids have no Python analog and follow bboxes).
+    ///   - **1.8**: `/label_images` are present (Python added the label-image
+    ///     datasets at format 1.8).
     ///   - **1.9**: `/identities_json` is present (Swift port extension).
     static func minimumFormatId(for labels: Labels) -> Float {
         var formatId: Float = 1.2
         if labels.hasEmbeddedVideo { formatId = max(formatId, 1.4) }
         if !labels.rois.isEmpty || !labels.masks.isEmpty { formatId = max(formatId, 1.5) }
         if !labels.bboxes.isEmpty || !labels.centroids.isEmpty { formatId = max(formatId, 1.7) }
+        if !labels.labelImages.isEmpty { formatId = max(formatId, 1.8) }
         if !labels.identities.isEmpty { formatId = max(formatId, 1.9) }
         return formatId
     }
@@ -188,30 +197,60 @@ public struct SLPWriter {
         guard !videos.isEmpty else { return }
         var videoJsons: [String] = []
         for video in videos {
-            var dict: [String: Any] = [:]
-            var backend: [String: Any] = video.backendMetadata
-            backend["filename"] = video.filename
-            backend["type"] = video.backendType
-
-            // Preserve original path provenance only while a permanent relocation is active.
-            if video.persistedFilename != nil {
-                backend["original_filename"] = video.originalFilename
-            } else {
-                backend.removeValue(forKey: "original_filename")
-            }
-
-            // Persist shape if available but not already in metadata
-            if backend["shape"] == nil,
-               let fc = video.frameCount,
-               let fs = video.frameSize {
-                backend["shape"] = [fc, fs.height, fs.width, fs.channels]
-            }
-
-            dict["backend"] = backend
+            let dict = encodeVideo(video)
             let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
             videoJsons.append(String(data: data, encoding: .utf8) ?? "")
         }
         try file.writeVLenStringDataset(name: "videos_json", strings: videoJsons)
+    }
+
+    /// Encode a ``Video`` to its Python-compatible `videos_json` dictionary — the
+    /// inverse of ``SLPVideoTable/decodeVideo(from:)`` and a mirror of Python
+    /// sleap-io's `video_to_dict`.
+    ///
+    /// Emits `{ "backend": {...} }` and, when the video carries
+    /// ``Video/sourceVideo`` lineage, a nested `source_video` entry so that
+    /// provenance survives a save. This is the fix for issue #54: previously the
+    /// writer dropped `source_video` for non-embedded videos, silently losing the
+    /// lineage on round-trip. The nesting is recursive, so a multi-level source
+    /// chain is fully serialized.
+    static func encodeVideo(_ video: Video) -> [String: Any] {
+        var backend: [String: Any] = video.backendMetadata
+        backend["filename"] = video.filename
+        backend["type"] = video.backendType
+
+        // Preserve original path provenance only while a permanent relocation is active.
+        if video.persistedFilename != nil {
+            backend["original_filename"] = video.originalFilename
+        } else {
+            backend.removeValue(forKey: "original_filename")
+        }
+
+        // Persist shape if available but not already in metadata.
+        if backend["shape"] == nil,
+           let fc = video.frameCount,
+           let fs = video.frameSize {
+            backend["shape"] = [fc, fs.height, fs.width, fs.channels]
+        }
+
+        var dict: [String: Any] = ["backend": backend]
+        if let source = video.sourceVideo {
+            dict["source_video"] = encodeVideo(source)
+        }
+        return dict
+    }
+
+    /// JSON-encode a ``Video``'s source-video lineage for the embedded
+    /// `source_video` HDF5 group, or `nil` when there is no lineage. Mirrors the
+    /// nested dictionary ``SLPVideoTable/decodeVideo(fromJSON:)`` decodes.
+    private static func sourceVideoJSON(for video: Video) -> String? {
+        guard let source = video.sourceVideo,
+              let data = try? JSONSerialization.data(
+                withJSONObject: encodeVideo(source), options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return json
     }
 
     private static func writeEmbeddedVideos(_ videos: [Video], file: HDF5File, progress: ProgressReporter?) throws {
@@ -243,10 +282,24 @@ public struct SLPWriter {
                 }
             }
 
+            // Prefer the backend's recorded source-video JSON, but synthesize it
+            // from ``Video/sourceVideo`` when the backend carries none (issue #54:
+            // an embedded video written from an in-memory cache would otherwise
+            // lose its lineage). The H5Ocopy path above already preserves the
+            // source_video group verbatim, so this only covers the fallback.
+            let backendJSON = backend.sourceVideoJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+            let effectiveSourceVideoJSON: String
+            if backendJSON.isEmpty || backendJSON == "{}",
+               let synthesized = sourceVideoJSON(for: video) {
+                effectiveSourceVideoJSON = synthesized
+            } else {
+                effectiveSourceVideoJSON = backend.sourceVideoJSON
+            }
+
             try EmbeddedVideo.writeFrames(
                 frameData: frameData,
                 videoIndex: index,
-                sourceVideoJSON: backend.sourceVideoJSON,
+                sourceVideoJSON: effectiveSourceVideoJSON,
                 format: backend.format,
                 channelOrder: backend.channelOrder,
                 to: file
@@ -896,6 +949,134 @@ public struct SLPWriter {
         try writeJSONListAttribute(to: ds, name: "categories", values: centroids.map { $0.category ?? "" })
         try writeJSONListAttribute(to: ds, name: "names", values: centroids.map { $0.name ?? "" })
         try writeJSONListAttribute(to: ds, name: "sources", values: centroids.map { $0.source ?? "" })
+    }
+
+    // MARK: - Write label images
+
+    /// Write ``LabelImage`` annotations across the `/label_images`,
+    /// `/label_image_objects`, and `/label_image_data` datasets.
+    ///
+    /// The layout mirrors Python sleap-io's `write_label_images` dataset names and
+    /// per-image compound fields (`video`, `frame_idx`, `height`, `width`,
+    /// `n_objects`, `objects_start`, `data_start`, `data_end`) with two Swift-port
+    /// adaptations: pixel data is stored as a flat rank-1 **int32** dataset
+    /// (`data_start`/`data_end` are element offsets, read back one image at a time
+    /// via a hyperslab) rather than a zlib-compressed uint8 stream, and there is no
+    /// predicted variant. Object metadata (`categories`/`names`) rides on
+    /// JSON-list attributes exactly as ``writeROIs`` / ``writeBboxes`` do.
+    private static func writeLabelImages(_ labelImages: [LabelImage], file: HDF5File) throws {
+        guard !labelImages.isEmpty else { return }
+
+        // Flat pixel buffer + per-image element offsets, plus the object table.
+        var pixelData: [Int32] = []
+        var liRows: [(video: Int32, frameIdx: Int64, height: UInt32, width: UInt32,
+                      nObjects: UInt32, objectsStart: UInt32,
+                      dataStart: UInt64, dataEnd: UInt64)] = []
+        var objRows: [(labelID: Int32, track: Int32, instance: Int32)] = []
+        var categories: [String] = []
+        var names: [String] = []
+        var sources: [String] = []
+        var objOffset = 0
+
+        for li in labelImages {
+            let dataStart = pixelData.count
+            pixelData.append(contentsOf: li.data)
+            let dataEnd = pixelData.count
+
+            let objectsStart = objOffset
+            for labelID in li.objects.keys.sorted() {
+                let info = li.objects[labelID]!
+                objRows.append((
+                    labelID: Int32(labelID),
+                    track: Int32(info.trackIndex ?? -1),
+                    instance: Int32(info.instanceIndex ?? -1)))
+                categories.append(info.category)
+                names.append(info.name)
+            }
+            objOffset += li.objects.count
+
+            liRows.append((
+                video: Int32(li.videoIndex ?? -1),
+                frameIdx: Int64(li.frameIndex ?? -1),
+                height: UInt32(li.height),
+                width: UInt32(li.width),
+                nObjects: UInt32(li.objects.count),
+                objectsStart: UInt32(objectsStart),
+                dataStart: UInt64(dataStart),
+                dataEnd: UInt64(dataEnd)))
+            sources.append(li.source)
+        }
+
+        // /label_images compound table.
+        let liRowSize = 44
+        let liType = try HDF5Datatype.createCompound(size: liRowSize)
+        try liType.insertField(name: "video", offset: 0, type: shim_H5T_NATIVE_INT32())
+        try liType.insertField(name: "frame_idx", offset: 4, type: shim_H5T_NATIVE_INT64())
+        try liType.insertField(name: "height", offset: 12, type: shim_H5T_NATIVE_UINT32())
+        try liType.insertField(name: "width", offset: 16, type: shim_H5T_NATIVE_UINT32())
+        try liType.insertField(name: "n_objects", offset: 20, type: shim_H5T_NATIVE_UINT32())
+        try liType.insertField(name: "objects_start", offset: 24, type: shim_H5T_NATIVE_UINT32())
+        try liType.insertField(name: "data_start", offset: 28, type: shim_H5T_NATIVE_UINT64())
+        try liType.insertField(name: "data_end", offset: 36, type: shim_H5T_NATIVE_UINT64())
+
+        var liBuffer = Data(count: liRows.count * liRowSize)
+        liBuffer.withUnsafeMutableBytes { ptr in
+            let base = ptr.baseAddress!
+            for (i, row) in liRows.enumerated() {
+                let p = base + i * liRowSize
+                p.storeBytes(of: row.video, toByteOffset: 0, as: Int32.self)
+                p.storeBytes(of: row.frameIdx, toByteOffset: 4, as: Int64.self)
+                p.storeBytes(of: row.height, toByteOffset: 12, as: UInt32.self)
+                p.storeBytes(of: row.width, toByteOffset: 16, as: UInt32.self)
+                p.storeBytes(of: row.nObjects, toByteOffset: 20, as: UInt32.self)
+                p.storeBytes(of: row.objectsStart, toByteOffset: 24, as: UInt32.self)
+                p.storeBytes(of: row.dataStart, toByteOffset: 28, as: UInt64.self)
+                p.storeBytes(of: row.dataEnd, toByteOffset: 36, as: UInt64.self)
+            }
+        }
+
+        let liSpace = try HDF5Dataspace.create(dims: [liRows.count])
+        let liDs = try file.createDataset(name: "label_images", type: liType, space: liSpace)
+        try liBuffer.withUnsafeBytes { ptr in
+            try liDs.writeRaw(ptr.baseAddress!, memType: liType.id)
+        }
+        try writeJSONListAttribute(to: liDs, name: "sources", values: sources)
+
+        // /label_image_objects compound table (skip when there are no objects —
+        // a zero-row compound write is unrepresentable; the reader tolerates it).
+        if !objRows.isEmpty {
+            let objRowSize = 12
+            let objType = try HDF5Datatype.createCompound(size: objRowSize)
+            try objType.insertField(name: "label_id", offset: 0, type: shim_H5T_NATIVE_INT32())
+            try objType.insertField(name: "track", offset: 4, type: shim_H5T_NATIVE_INT32())
+            try objType.insertField(name: "instance", offset: 8, type: shim_H5T_NATIVE_INT32())
+
+            var objBuffer = Data(count: objRows.count * objRowSize)
+            objBuffer.withUnsafeMutableBytes { ptr in
+                let base = ptr.baseAddress!
+                for (i, row) in objRows.enumerated() {
+                    let p = base + i * objRowSize
+                    p.storeBytes(of: row.labelID, toByteOffset: 0, as: Int32.self)
+                    p.storeBytes(of: row.track, toByteOffset: 4, as: Int32.self)
+                    p.storeBytes(of: row.instance, toByteOffset: 8, as: Int32.self)
+                }
+            }
+
+            let objSpace = try HDF5Dataspace.create(dims: [objRows.count])
+            let objDs = try file.createDataset(name: "label_image_objects", type: objType, space: objSpace)
+            try objBuffer.withUnsafeBytes { ptr in
+                try objDs.writeRaw(ptr.baseAddress!, memType: objType.id)
+            }
+            try writeJSONListAttribute(to: objDs, name: "categories", values: categories)
+            try writeJSONListAttribute(to: objDs, name: "names", values: names)
+        }
+
+        // /label_image_data flat int32 pixel buffer. The reader gates on this
+        // dataset's presence, so only write it when there are pixels.
+        if !pixelData.isEmpty {
+            try file.writeDataset(name: "label_image_data", data: pixelData,
+                                  type: shim_H5T_NATIVE_INT32())
+        }
     }
 
     // MARK: - Helpers

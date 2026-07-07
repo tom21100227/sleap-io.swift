@@ -307,6 +307,36 @@ public struct EmbeddedVideo {
         return data
     }
 
+    /// Read a contiguous run of `Int32` elements from a rank-1 dataset via a
+    /// single hyperslab selection, so only the requested region is transferred
+    /// from disk (the rest of the dataset is never read into memory).
+    ///
+    /// This is the ``readRowBytes(dataset:rowIndex:shape:)`` single-slice
+    /// technique generalized to an arbitrary contiguous 1-D range, used for
+    /// per-image label-image pixel reads (see ``SLPReader``): a label image's
+    /// pixels are stored as a `[start, start + count)` window of the flat
+    /// `/label_image_data` dataset, and only that window is materialized.
+    ///
+    /// - Parameters:
+    ///   - dataset: A rank-1 `Int32` dataset.
+    ///   - start: Zero-based element offset of the first element to read.
+    ///   - count: Number of elements to read.
+    /// - Returns: Exactly `count` elements starting at `start`.
+    static func readInt32Region(dataset: HDF5Dataset, start: Int, count: Int) throws -> [Int32] {
+        guard count > 0 else { return [] }
+
+        let fileSpace = dataset.dataspace
+        try fileSpace.selectHyperslab(offset: [start], count: [count])
+        let memSpace = try HDF5Dataspace.create(dims: [count])
+
+        var buffer = [Int32](repeating: 0, count: count)
+        try hdf5Check("H5Dread label image pixels int32") {
+            H5Dread(dataset.id, shim_H5T_NATIVE_INT32(), memSpace.id, fileSpace.id,
+                    shim_H5P_DEFAULT(), &buffer)
+        }
+        return buffer
+    }
+
     /// Write embedded frames to an SLP file.
     /// Creates /video{N}/video, /video{N}/frame_numbers, /video{N}/source_video groups.
     static func writeFrames(

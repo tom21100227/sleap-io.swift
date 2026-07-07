@@ -142,6 +142,9 @@ public final class Labels: @unchecked Sendable {
     public var centroids: [Centroid]
     /// Ground-truth identity annotations for the dataset. Mirrors ``rois`` / ``masks``.
     public var identities: [Identity]
+    /// Per-pixel label-image (dense integer segmentation) annotations for the
+    /// dataset. Mirrors ``rois`` / ``masks``.
+    public var labelImages: [LabelImage]
 
     // MARK: - Init
 
@@ -158,6 +161,7 @@ public final class Labels: @unchecked Sendable {
         self.bboxes = []
         self.centroids = []
         self.identities = []
+        self.labelImages = []
     }
 
     /// Internal initializer used by readers.
@@ -172,7 +176,8 @@ public final class Labels: @unchecked Sendable {
                 masks: [SegmentationMask] = [],
                 bboxes: [BoundingBox] = [],
                 centroids: [Centroid] = [],
-                identities: [Identity] = []) {
+                identities: [Identity] = [],
+                labelImages: [LabelImage] = []) {
         self.frameStore = frameStore
         self._videos = videos
         self._skeletons = skeletons
@@ -185,6 +190,7 @@ public final class Labels: @unchecked Sendable {
         self.bboxes = bboxes
         self.centroids = centroids
         self.identities = identities
+        self.labelImages = labelImages
     }
 
     // MARK: - Lazy loading

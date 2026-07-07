@@ -174,7 +174,7 @@ enum SessionSchema {
         from dict: [String: Any],
         videos: [Video],
         videoIdMap: [Int: Int],
-        frames: [LabeledFrame]
+        frames: FrameStore
     ) -> RecordingSession {
         let session = RecordingSession()
 
@@ -218,6 +218,21 @@ enum SessionSchema {
         return session
     }
 
+    /// Back-compat overload for callers holding a plain `[LabeledFrame]` array
+    /// (the eager reader and unit tests). Wraps the array in an
+    /// ``EagerFrameStore`` and delegates to the ``FrameStore`` implementation so
+    /// both the eager and lazy paths share one decoder.
+    static func makeSession(
+        from dict: [String: Any],
+        videos: [Video],
+        videoIdMap: [Int: Int],
+        frames: [LabeledFrame]
+    ) -> RecordingSession {
+        makeSession(
+            from: dict, videos: videos, videoIdMap: videoIdMap,
+            frames: EagerFrameStore(frames: frames))
+    }
+
     /// Decode the ordered camera list from a `calibration` dictionary. Cameras
     /// are keyed `cam_0`, `cam_1`, … and returned sorted by that index; the
     /// `metadata` key (and any non-`cam_` key) is ignored.
@@ -247,7 +262,7 @@ enum SessionSchema {
     private static func decodeFrameGroup(
         _ dict: [String: Any],
         orderedCameras: [Camera],
-        frames: [LabeledFrame]
+        frames: FrameStore
     ) -> FrameGroup? {
         guard let instanceGroupDicts = dict["instance_groups"] as? [[String: Any]] else { return nil }
         let group = FrameGroup()
@@ -263,7 +278,9 @@ enum SessionSchema {
                       let instValue = doubleValue(pair[1]) else { continue }
                 let lfIdx = Int(lfValue), instIdx = Int(instValue)
                 guard lfIdx >= 0, lfIdx < frames.count else { continue }
-                let labeledFrame = frames[lfIdx]
+                // On a lazy store this materializes (and caches) just this frame,
+                // so it stays identity-stable with later `labels[lfIdx]` access.
+                let labeledFrame = frames.frame(at: lfIdx)
                 guard instIdx >= 0, instIdx < labeledFrame.instances.count else { continue }
                 let camera = orderedCameras[camIdx]
                 instanceGroup.instances[camera] = labeledFrame.instances[instIdx]

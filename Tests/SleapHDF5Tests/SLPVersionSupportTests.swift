@@ -67,12 +67,9 @@ final class SLPVersionSupportTests: XCTestCase {
     }
 
     func testUnmodeledDatasetNames_documentsSkippedDatasets() {
-        // bboxes/centroids/identities/masks are now modeled and read best-effort;
-        // only label images remain unmodeled (epic E7 #47).
-        XCTAssertEqual(
-            Set(SLPReader.unmodeledDatasetNames),
-            ["label_images"]
-        )
+        // rois/masks/bboxes/centroids/identities AND label_images (#47) are now all
+        // modeled and read best-effort, so nothing remains unmodeled.
+        XCTAssertEqual(Set(SLPReader.unmodeledDatasetNames), [])
     }
 
     // MARK: - End-to-end: newer versions load modeled data

@@ -173,7 +173,13 @@ extension SLPReader {
 
         // 5. Read small metadata datasets (suggestions, sessions, etc.)
         let suggestions = try readSuggestionsInternal(from: file, videos: videos, videoIdMap: videoIdMap)
-        let sessions = try readSessionsInternal(from: file, videos: videos, videoIdMap: videoIdMap)
+        // Sessions are decoded through the shared ``SessionSchema/makeSession`` so
+        // the lazy path restores calibration + frame groups too (issue #56). The
+        // lazy frame list is passed as the frame store so ``decodeFrameGroup`` only
+        // materializes the handful of frames referenced by frame groups (and those
+        // stay identity-stable with later `labels[i]` access).
+        let sessions = try readSessionsInternal(
+            from: file, videos: videos, videoIdMap: videoIdMap, frames: frameList)
         let rois = try readROIsInternal(from: file, formatId: formatId)
         let masks = try readMasksInternal(from: file, formatId: formatId)
 
@@ -185,6 +191,7 @@ extension SLPReader {
         let identities = SLPReader.readIdentities(from: file)
         let bboxes = SLPReader.readBboxes(from: file)
         let centroids = SLPReader.readCentroids(from: file)
+        let labelImages = SLPReader.readLabelImages(from: file)
 
         return Labels(
             frameStore: frameList,
@@ -198,7 +205,8 @@ extension SLPReader {
             masks: masks,
             bboxes: bboxes,
             centroids: centroids,
-            identities: identities
+            identities: identities,
+            labelImages: labelImages
         )
     }
 
@@ -344,8 +352,14 @@ extension SLPReader {
         return suggestions
     }
 
+    /// Decode `/sessions_json` on the lazy path through the same
+    /// ``SessionSchema/makeSession(from:videos:videoIdMap:frames:)`` the eager
+    /// reader uses, so calibration, the camera→video map, and synchronized frame
+    /// groups are all restored (issue #56). `frames` is the lazy frame store; only
+    /// the frames referenced by frame groups are materialized (and cached), so the
+    /// common no-session / no-frame-group file materializes nothing.
     private static func readSessionsInternal(
-        from file: HDF5File, videos: [Video], videoIdMap: [Int: Int]
+        from file: HDF5File, videos: [Video], videoIdMap: [Int: Int], frames: FrameStore
     ) throws -> [RecordingSession] {
         guard file.exists(name: "sessions_json") else { return [] }
         let ds = try file.openDataset(name: "sessions_json")
@@ -354,23 +368,8 @@ extension SLPReader {
         for str in strings {
             guard let data = str.data(using: .utf8),
                   let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            let session = RecordingSession()
-            if let camVideos = dict["camera_to_video"] as? [[String: Any]] {
-                for cv in camVideos {
-                    let camName = cv["camera_name"] as? String ?? "camera"
-                    let videoIdx = cv["video_idx"] as? Int ?? 0
-                    let camera = Camera(name: camName)
-                    guard let resolvedIdx = SLPVideoTable.resolvedIndex(
-                        for: videoIdx,
-                        videoIdMap: videoIdMap,
-                        videoCount: videos.count
-                    ) else {
-                        continue
-                    }
-                    session.cameraToVideo[camera] = videos[resolvedIdx]
-                }
-            }
-            sessions.append(session)
+            sessions.append(SessionSchema.makeSession(
+                from: dict, videos: videos, videoIdMap: videoIdMap, frames: frames))
         }
         return sessions
     }

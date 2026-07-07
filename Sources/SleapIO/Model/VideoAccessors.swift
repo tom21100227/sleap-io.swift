@@ -65,9 +65,45 @@ extension Video {
         Video(filename: filename, backendType: inferBackendType(filename))
     }
 
+    /// The canonical backend-type identifier for a virtual on-read crop video
+    /// (SLP 2.3 `CropVideoBackend`). A crop video is not inferred from a file
+    /// extension — it wraps a source video — so it is identified by this string on
+    /// ``backendType`` together with a ``cropRegion`` read from `video_crops` /
+    /// `crop` metadata. Registered here alongside ``inferBackendType(_:)`` so the
+    /// model layer recognizes it as a first-class backend type.
+    public static let cropBackendType = "crop"
+
+    /// Whether `type` names the virtual crop backend (accepts the canonical
+    /// ``cropBackendType`` and the upstream `"CropVideo"` spelling).
+    public static func isCropBackendType(_ type: String) -> Bool {
+        type == cropBackendType || type == "CropVideo"
+    }
+
+    /// The axis-aligned crop region `(x1, y1, x2, y2)` in source pixel
+    /// coordinates for a virtual crop video, read from `backendMetadata["crop"]`
+    /// (or the upstream `["video_crops"]`) as a 4-element integer array; `nil`
+    /// when absent. Consumed by the SleapVideo crop backend to map coordinates
+    /// and crop frames on read.
+    public var cropRegion: (x1: Int, y1: Int, x2: Int, y2: Int)? {
+        let raw: Any? = backendMetadata["crop"] ?? backendMetadata["video_crops"]
+        guard let arr = Video.intArray(raw), arr.count == 4 else { return nil }
+        return (x1: arr[0], y1: arr[1], x2: arr[2], y2: arr[3])
+    }
+
+    /// Whether this video is a virtual crop video (its ``backendType`` names the
+    /// crop backend and it carries a ``cropRegion``).
+    public var isCropVideo: Bool {
+        Video.isCropBackendType(backendType) || cropRegion != nil
+    }
+
     /// Infer a backend-type identifier ("media" / "hdf5" / "imageSequence" /
-    /// "tiff" / "seq") from a file extension.
+    /// "tiff" / "seq" / "crop") from a file extension.
+    ///
+    /// The virtual ``cropBackendType`` has no dedicated extension (it wraps a
+    /// source video), so it is only produced when `filename` is already the crop
+    /// identifier; ordinary paths fall through to their extension-based type.
     static func inferBackendType(_ filename: String) -> String {
+        if isCropBackendType(filename) { return cropBackendType }
         let ext = (filename as NSString).pathExtension.lowercased()
         switch ext {
         case "mp4", "mov", "avi", "m4v", "mkv", "webm", "mpg", "mpeg":
