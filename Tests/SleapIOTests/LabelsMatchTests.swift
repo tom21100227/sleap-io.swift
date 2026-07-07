@@ -1,7 +1,7 @@
 import XCTest
 @testable import SleapIO
 
-/// Tests for ``Labels/match(_:matchVideos:matchSkeletons:matchTracks:)``: pure
+/// Tests for ``Labels/match(_:videoMatcher:skeletonMatcher:trackMatcher:)``: pure
 /// correspondence matching that never mutates either collection.
 final class LabelsMatchTests: XCTestCase {
     private func makeSelf() -> (Labels, Video, Skeleton, Track) {
@@ -103,10 +103,10 @@ final class LabelsMatchTests: XCTestCase {
             frameStore: EagerFrameStore(frames: []),
             videos: [], skeletons: [], tracks: [t2])
 
-        let byName = selfLabels.match(other, matchTracks: TrackMatcher(method: .name))
+        let byName = selfLabels.match(other, trackMatcher: TrackMatcher(method: .name))
         XCTAssertEqual(byName.nTracksMatched, 1)
 
-        let byIdentity = selfLabels.match(other, matchTracks: TrackMatcher(method: .identity))
+        let byIdentity = selfLabels.match(other, trackMatcher: TrackMatcher(method: .identity))
         XCTAssertEqual(byIdentity.nTracksMatched, 0)
     }
 }

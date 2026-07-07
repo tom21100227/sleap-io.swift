@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Labels.match
 //
 // Pure correspondence matching between two `Labels` collections, mirroring the
-// upstream `Labels.match`. Unlike ``Labels/merge(from:strategy:matchVideos:matchSkeletons:matchTracks:matchInstances:errorMode:progress:)``,
+// upstream `Labels.match`. Unlike ``Labels/merge(from:strategy:videoMatcher:skeletonMatcher:trackMatcher:instanceMatcher:errorMode:progress:)``,
 // this builds correspondence maps without mutating either collection, which is
 // useful for evaluation workflows that align predictions with ground truth.
 
@@ -18,19 +18,19 @@ extension Labels {
     ///
     /// - Parameters:
     ///   - other: The collection whose items are matched against this one.
-    ///   - matchVideos: Matcher used to correspond videos. Defaults to
+    ///   - videoMatcher: Matcher used to correspond videos. Defaults to
     ///     `VideoMatcher()`.
-    ///   - matchSkeletons: Matcher used to correspond skeletons. Defaults to
+    ///   - skeletonMatcher: Matcher used to correspond skeletons. Defaults to
     ///     `SkeletonMatcher()`.
-    ///   - matchTracks: Matcher used to correspond tracks. Defaults to
+    ///   - trackMatcher: Matcher used to correspond tracks. Defaults to
     ///     `TrackMatcher()`.
     /// - Returns: A ``MatchResult`` with the video, skeleton, and track
     ///   correspondence maps (`other` -> `self`, `nil` when unmatched).
     public func match(
         _ other: Labels,
-        matchVideos: VideoMatcher = VideoMatcher(),
-        matchSkeletons: SkeletonMatcher = SkeletonMatcher(),
-        matchTracks: TrackMatcher = TrackMatcher()
+        videoMatcher: VideoMatcher = VideoMatcher(),
+        skeletonMatcher: SkeletonMatcher = SkeletonMatcher(),
+        trackMatcher: TrackMatcher = TrackMatcher()
     ) -> MatchResult {
         var videoMap: [Video: Video?] = [:]
         var skeletonMap: [Skeleton: Skeleton?] = [:]
@@ -38,19 +38,19 @@ extension Labels {
 
         // Skeletons: first local skeleton matching each incoming one.
         for otherSkeleton in other.skeletons {
-            let matched = skeletons.first { matchSkeletons.match($0, otherSkeleton) }
+            let matched = skeletons.first { skeletonMatcher.match($0, otherSkeleton) }
             skeletonMap.updateValue(matched, forKey: otherSkeleton)
         }
 
         // Videos: first local video matching each incoming one.
         for otherVideo in other.videos {
-            let matched = matchVideos.firstMatch(for: otherVideo, in: videos)
+            let matched = videoMatcher.firstMatch(for: otherVideo, in: videos)
             videoMap.updateValue(matched, forKey: otherVideo)
         }
 
         // Tracks: first local track matching each incoming one.
         for otherTrack in other.tracks {
-            let matched = tracks.first { matchTracks.match($0, otherTrack) }
+            let matched = trackMatcher.firstMatch(for: otherTrack, in: tracks)
             trackMap.updateValue(matched, forKey: otherTrack)
         }
 

@@ -212,6 +212,10 @@ public struct MergeResult: Sendable, Equatable {
     /// Number of new instances added.
     public var instancesAdded: Int
 
+    /// Number of existing instances that were removed (e.g. by wholesale-
+    /// replacement strategies such as `.keepNew` / `.replacePredictions`).
+    public var instancesRemoved: Int
+
     /// Number of existing instances that were updated.
     public var instancesUpdated: Int
 
@@ -230,6 +234,7 @@ public struct MergeResult: Sendable, Equatable {
     ///   - successful: Whether the merge completed without errors.
     ///   - framesMerged: Number of frames merged into existing frames.
     ///   - instancesAdded: Number of new instances added.
+    ///   - instancesRemoved: Number of existing instances removed.
     ///   - instancesUpdated: Number of existing instances updated.
     ///   - instancesSkipped: Number of instances skipped.
     ///   - conflicts: Conflicts resolved during the merge.
@@ -238,6 +243,7 @@ public struct MergeResult: Sendable, Equatable {
         successful: Bool,
         framesMerged: Int = 0,
         instancesAdded: Int = 0,
+        instancesRemoved: Int = 0,
         instancesUpdated: Int = 0,
         instancesSkipped: Int = 0,
         conflicts: [ConflictResolution] = [],
@@ -246,6 +252,7 @@ public struct MergeResult: Sendable, Equatable {
         self.successful = successful
         self.framesMerged = framesMerged
         self.instancesAdded = instancesAdded
+        self.instancesRemoved = instancesRemoved
         self.instancesUpdated = instancesUpdated
         self.instancesSkipped = instancesSkipped
         self.conflicts = conflicts
@@ -260,6 +267,9 @@ public struct MergeResult: Sendable, Equatable {
         lines.append("  Frames merged: \(framesMerged)")
         lines.append("  Instances added: \(instancesAdded)")
 
+        if instancesRemoved != 0 {
+            lines.append("  Instances removed: \(instancesRemoved)")
+        }
         if instancesUpdated != 0 {
             lines.append("  Instances updated: \(instancesUpdated)")
         }

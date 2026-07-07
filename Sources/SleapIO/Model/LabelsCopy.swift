@@ -114,9 +114,8 @@ extension Labels {
             for inst in frame.instances {
                 let clonedSkeleton = mappedSkeleton(inst.skeleton)
                 let clonedTrack = inst.track.map { mappedTrack($0) }
-                let clonedInst = Self.cloneInstance(inst,
-                                                    skeleton: clonedSkeleton,
-                                                    track: clonedTrack)
+                let clonedInst = inst.clone(skeleton: clonedSkeleton,
+                                            track: clonedTrack)
                 instanceMap[ObjectIdentifier(inst)] = clonedInst
                 clonedInstances.append(clonedInst)
             }
@@ -226,32 +225,6 @@ extension Labels {
                         nodes: clonedNodes,
                         edges: clonedEdges,
                         symmetries: clonedSymmetries)
-    }
-
-    /// Clone an instance (user or predicted), wiring it to the already-cloned
-    /// skeleton and track. Points are deep-copied value types; the cloned
-    /// `PointsArray.skeleton` is repointed to the cloned skeleton.
-    private static func cloneInstance(_ instance: Instance,
-                                      skeleton: Skeleton,
-                                      track: Track?) -> Instance {
-        if let predicted = instance as? PredictedInstance {
-            var ppa = predicted.predictedPoints
-            ppa.skeleton = skeleton
-            let cloned = PredictedInstance(skeleton: skeleton,
-                                           points: ppa,
-                                           score: predicted.score,
-                                           track: track,
-                                           trackingScore: predicted.trackingScore)
-            return cloned
-        } else {
-            var pts = instance.points
-            pts.skeleton = skeleton
-            let cloned = Instance(skeleton: skeleton,
-                                  points: pts,
-                                  track: track,
-                                  trackingScore: instance.trackingScore)
-            return cloned
-        }
     }
 
     /// Reassemble a cloned identity table preserving original order and appending

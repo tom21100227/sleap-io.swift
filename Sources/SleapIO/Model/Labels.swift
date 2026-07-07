@@ -370,13 +370,19 @@ public final class Labels: @unchecked Sendable {
     /// with the supplied matchers and merging frames via the frame-level cascade.
     ///
     /// Mirrors the upstream `Labels.merge`. Incoming videos, skeletons, and tracks
-    /// are resolved against this collection using `matchVideos` / `matchSkeletons`
-    /// / `matchTracks`: a matched item is reused (and incoming instances/frames are
+    /// are resolved against this collection using `videoMatcher` / `skeletonMatcher`
+    /// / `trackMatcher`: a matched item is reused (and incoming instances/frames are
     /// remapped onto it), while an unmatched item is appended. Frames that already
     /// exist are merged with
     /// ``LabeledFrame/merge(from:strategy:instanceMatcher:)`` (resolving duplicate
-    /// instances with `matchInstances`); frames that do not exist are added under
+    /// instances with `instanceMatcher`); frames that do not exist are added under
     /// the matched video.
+    ///
+    /// `other` is never mutated: every instance brought over from `other` is a
+    /// deep clone (via ``Instance/clone(skeleton:track:)``) remapped onto this
+    /// collection's matched skeleton/track objects, so the source graph is left
+    /// byte-for-byte unchanged and no live instance is aliased across the two
+    /// collections. This mirrors Python sleap-io's `_map_instance`.
     ///
     /// `errorMode` governs the skeleton-mismatch validation carried over from the
     /// earlier merge implementation: when this collection already has skeletons and
@@ -392,11 +398,11 @@ public final class Labels: @unchecked Sendable {
     /// - Parameters:
     ///   - other: The collection to merge into this one.
     ///   - strategy: Per-frame conflict strategy. Defaults to ``FrameStrategy/auto``.
-    ///   - matchVideos: Matcher used to dedup videos. Defaults to `VideoMatcher()`.
-    ///   - matchSkeletons: Matcher used to dedup skeletons. Defaults to
+    ///   - videoMatcher: Matcher used to dedup videos. Defaults to `VideoMatcher()`.
+    ///   - skeletonMatcher: Matcher used to dedup skeletons. Defaults to
     ///     `SkeletonMatcher()`.
-    ///   - matchTracks: Matcher used to dedup tracks. Defaults to `TrackMatcher()`.
-    ///   - matchInstances: Matcher used to detect duplicate instances within a
+    ///   - trackMatcher: Matcher used to dedup tracks. Defaults to `TrackMatcher()`.
+    ///   - instanceMatcher: Matcher used to detect duplicate instances within a
     ///     frame. Defaults to ``InstanceMatcher/duplicate``.
     ///   - errorMode: How skeleton-mismatch validation errors are handled.
     ///     Defaults to ``ErrorMode/ignore``.
@@ -407,10 +413,10 @@ public final class Labels: @unchecked Sendable {
     public func merge(
         from other: Labels,
         strategy: FrameStrategy = .auto,
-        matchVideos: VideoMatcher = VideoMatcher(),
-        matchSkeletons: SkeletonMatcher = SkeletonMatcher(),
-        matchTracks: TrackMatcher = TrackMatcher(),
-        matchInstances: InstanceMatcher = .duplicate,
+        videoMatcher: VideoMatcher = VideoMatcher(),
+        skeletonMatcher: SkeletonMatcher = SkeletonMatcher(),
+        trackMatcher: TrackMatcher = TrackMatcher(),
+        instanceMatcher: InstanceMatcher = .duplicate,
         errorMode: ErrorMode = .ignore,
         progress: ProgressReporter? = nil
     ) throws -> MergeResult {
@@ -434,7 +440,7 @@ public final class Labels: @unchecked Sendable {
         let selfHadSkeletons = !_skeletons.isEmpty
         var skeletonMap: [ObjectIdentifier: Skeleton] = [:]
         for incoming in other.skeletons {
-            if let matched = _skeletons.first(where: { matchSkeletons.match($0, incoming) }) {
+            if let matched = _skeletons.first(where: { skeletonMatcher.match($0, incoming) }) {
                 skeletonMap[ObjectIdentifier(incoming)] = matched
             } else {
                 if selfHadSkeletons {
@@ -452,7 +458,7 @@ public final class Labels: @unchecked Sendable {
         // Videos: dedup via matcher (reuse local match or append).
         var videoMap: [ObjectIdentifier: Video] = [:]
         for incoming in other.videos {
-            if let matched = matchVideos.firstMatch(for: incoming, in: _videos) {
+            if let matched = videoMatcher.firstMatch(for: incoming, in: _videos) {
                 videoMap[ObjectIdentifier(incoming)] = matched
             } else {
                 _videos.append(incoming)
@@ -465,7 +471,7 @@ public final class Labels: @unchecked Sendable {
         // Tracks: dedup via matcher.
         var trackMap: [ObjectIdentifier: Track] = [:]
         for incoming in other.tracks {
-            if let matched = _tracks.first(where: { matchTracks.match($0, incoming) }) {
+            if let matched = trackMatcher.firstMatch(for: incoming, in: _tracks) {
                 trackMap[ObjectIdentifier(incoming)] = matched
             } else {
                 _tracks.append(incoming)
@@ -474,23 +480,36 @@ public final class Labels: @unchecked Sendable {
         }
 
         // Frames: merge into a matching local frame or add a remapped copy.
+        //
+        // Every incoming frame is first rebuilt as a fully independent CLONE whose
+        // instances are deep-copied and remapped onto this collection's matched
+        // video/skeleton/track objects. `other`'s live objects are therefore never
+        // captured (new-frame branch) nor handed to ``LabeledFrame/merge`` (which
+        // may append/assign them), so the source graph is left uncorrupted.
         let totalFrames = other.frameStore.count
         for i in 0..<totalFrames {
             progress?(Double(i) / Double(totalFrames))
             let otherFrame = other.frameStore.frame(at: i)
             let mappedVideo = videoMap[ObjectIdentifier(otherFrame.video)] ?? otherFrame.video
 
+            let clonedFrame = LabeledFrame(
+                video: mappedVideo,
+                frameIndex: otherFrame.frameIndex,
+                instances: otherFrame.instances.map {
+                    clonedRemappedInstance($0, skeletonMap: skeletonMap, trackMap: trackMap)
+                },
+                isNegative: otherFrame.isNegative)
+
             if let existing = frame(for: mappedVideo, at: otherFrame.frameIndex) {
-                let nBefore = existing.instances.count
+                // Count additions/removals by identity churn so wholesale-replacement
+                // strategies (e.g. `.keepNew`, `.replacePredictions`) are accounted
+                // for correctly rather than by a raw before/after count delta.
+                let before = Set(existing.instances.map(ObjectIdentifier.init))
                 let conflicts = try existing.merge(
-                    from: otherFrame, strategy: strategy, instanceMatcher: matchInstances)
-                // Remap instances that originated from the incoming frame onto the
-                // matched local skeletons/tracks (no-op for already-local instances).
-                for inst in existing.instances {
-                    remapInstance(inst, skeletonMap: skeletonMap, trackMap: trackMap)
-                }
-                let nAfter = existing.instances.count
-                result.instancesAdded += Swift.max(0, nAfter - nBefore)
+                    from: clonedFrame, strategy: strategy, instanceMatcher: instanceMatcher)
+                let after = Set(existing.instances.map(ObjectIdentifier.init))
+                result.instancesAdded += after.subtracting(before).count
+                result.instancesRemoved += before.subtracting(after).count
                 result.conflicts.append(contentsOf: conflicts)
                 for conflict in conflicts {
                     switch conflict.resolution {
@@ -501,25 +520,15 @@ public final class Labels: @unchecked Sendable {
                 }
                 result.framesMerged += 1
             } else {
-                // `LabeledFrame.video` is immutable, so a new frame is built under
-                // the matched video with instances remapped onto local objects.
-                let newFrame = LabeledFrame(
-                    video: mappedVideo,
-                    frameIndex: otherFrame.frameIndex,
-                    instances: otherFrame.instances,
-                    isNegative: otherFrame.isNegative)
-                for inst in newFrame.instances {
-                    remapInstance(inst, skeletonMap: skeletonMap, trackMap: trackMap)
-                }
-                result.instancesAdded += newFrame.instances.count
-                eagerStore.frames.append(newFrame)
+                result.instancesAdded += clonedFrame.instances.count
+                eagerStore.frames.append(clonedFrame)
                 // Keep the lookup index consistent so a later iteration targeting the
                 // same (video, frameIndex) finds this newly appended frame.
                 invalidateFrameLookup()
                 result.framesMerged += 1
             }
         }
-        if totalFrames > 0 { progress?(1.0) }
+        progress?(1.0)
 
         // Suggestions: carry over any not already present on the mapped video.
         for suggestion in other.suggestions {
@@ -546,6 +555,7 @@ public final class Labels: @unchecked Sendable {
             "result": .object([
                 "frames_merged": .int(result.framesMerged),
                 "instances_added": .int(result.instancesAdded),
+                "instances_removed": .int(result.instancesRemoved),
                 "conflicts": .int(result.conflicts.count),
             ]),
         ]))
@@ -554,22 +564,31 @@ public final class Labels: @unchecked Sendable {
         return result
     }
 
-    /// Remap an instance's skeleton and track references onto the matched local
-    /// objects, if the merge matchers deduped them to a different object.
-    private func remapInstance(
+    /// Produce a deep clone of an incoming instance remapped onto this
+    /// collection's matched local skeleton/track objects.
+    ///
+    /// The clone shares no mutable state with `instance` (so the source graph is
+    /// never mutated), and its skeleton/track are the local objects the merge
+    /// matchers deduped onto. When the matched skeleton differs from the incoming
+    /// one, points are re-aligned by node name via
+    /// ``Instance/replaceSkeleton(_:nodeNamesMap:)`` (which tolerates a different
+    /// node order), matching the previous in-place remap semantics.
+    private func clonedRemappedInstance(
         _ instance: Instance,
         skeletonMap: [ObjectIdentifier: Skeleton],
         trackMap: [ObjectIdentifier: Track]
-    ) {
-        if let mapped = skeletonMap[ObjectIdentifier(instance.skeleton)],
-           mapped !== instance.skeleton {
-            instance.replaceSkeleton(mapped)
+    ) -> Instance {
+        let mappedTrack: Track? = instance.track.flatMap {
+            trackMap[ObjectIdentifier($0)] ?? $0
         }
-        if let track = instance.track,
-           let mapped = trackMap[ObjectIdentifier(track)],
-           mapped !== track {
-            instance.track = mapped
+        // Clone under the ORIGINAL skeleton so points stay index-aligned, then
+        // remap onto the matched local skeleton by name if it is a distinct object.
+        let clone = instance.clone(skeleton: instance.skeleton, track: mappedTrack)
+        if let mappedSkeleton = skeletonMap[ObjectIdentifier(instance.skeleton)],
+           mappedSkeleton !== instance.skeleton {
+            clone.replaceSkeleton(mappedSkeleton)
         }
+        return clone
     }
 
     /// The upstream-style string identifier for a frame merge strategy, used in

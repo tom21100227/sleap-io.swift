@@ -207,6 +207,47 @@ public class Instance: Hashable, @unchecked Sendable {
         return selfTrack === otherTrack
     }
 
+    // MARK: - Cloning
+
+    /// Produce a new, fully independent copy of this instance wired to the given
+    /// skeleton and track.
+    ///
+    /// The landmark ``points`` (and, for a ``PredictedInstance``, the per-point
+    /// ``PredictedInstance/predictedPoints`` including scores) are deep-copied
+    /// value types, and the copied ``PointsArray/skeleton`` is repointed to
+    /// `skeleton`. The `score` / ``trackingScore`` scalars are carried over. The
+    /// returned object shares no mutable state with `self`, so remapping or editing
+    /// it never affects the original — mirroring Python sleap-io's `_map_instance`.
+    ///
+    /// - Note: `skeleton` must have the same node order as this instance's current
+    ///   ``skeleton`` for the copied points to stay index-aligned. To remap onto a
+    ///   structurally-matching skeleton whose node order may differ, clone with the
+    ///   original skeleton and then call
+    ///   ``replaceSkeleton(_:nodeNamesMap:)`` on the clone (which remaps by name).
+    ///
+    /// - Parameters:
+    ///   - skeleton: The skeleton the clone should reference.
+    ///   - track: The track the clone should reference (or `nil`).
+    /// - Returns: A new ``Instance`` / ``PredictedInstance`` deep-copied from `self`.
+    public func clone(skeleton: Skeleton, track: Track?) -> Instance {
+        if let predicted = self as? PredictedInstance {
+            var ppa = predicted.predictedPoints
+            ppa.skeleton = skeleton
+            return PredictedInstance(skeleton: skeleton,
+                                     points: ppa,
+                                     score: predicted.score,
+                                     track: track,
+                                     trackingScore: predicted.trackingScore)
+        } else {
+            var pts = points
+            pts.skeleton = skeleton
+            return Instance(skeleton: skeleton,
+                            points: pts,
+                            track: track,
+                            trackingScore: trackingScore)
+        }
+    }
+
     // MARK: - Identity equality
 
     public static func == (lhs: Instance, rhs: Instance) -> Bool {

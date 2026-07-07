@@ -51,7 +51,70 @@ final class LabelsMergeTests: XCTestCase {
         let mergedFrame = try XCTUnwrap(base.frame(for: base.videos[0], at: 3))
         XCTAssertEqual(mergedFrame.userInstances.count, 1)
         XCTAssertEqual(mergedFrame.predictedInstances.count, 1)
-        XCTAssertTrue(mergedFrame.predictedInstances[0] === incomingPrediction)
+        // The merged prediction is a distinct deep clone of the incoming one — the
+        // source object is never aliased into `base`.
+        XCTAssertFalse(mergedFrame.predictedInstances[0] === incomingPrediction)
+        XCTAssertEqual(mergedFrame.predictedInstances[0].score, incomingPrediction.score)
+        XCTAssertEqual(mergedFrame.predictedInstances[0].points[0], incomingPrediction.points[0])
+        // `other` still owns the original prediction object.
+        XCTAssertTrue(other.frameStore.frame(at: 0).predictedInstances[0] === incomingPrediction)
+    }
+
+    /// Regression for the aliasing/corruption blocker: merging must deep-clone
+    /// every incoming instance onto `self`'s matched skeleton/track objects and
+    /// leave `other` byte-for-byte unchanged (no shared live instances).
+    func testMergeDoesNotCorruptSourceLabels() throws {
+        // Base and other have structurally-matching but DISTINCT identity objects.
+        let baseSkel = Skeleton(name: "base",
+                                nodes: [Node(name: "head"), Node(name: "tail")])
+        let otherSkel = Skeleton(name: "other",
+                                 nodes: [Node(name: "head"), Node(name: "tail")])
+        let baseTrack = Track(name: "1")
+        let otherTrack = Track(name: "1")
+        let baseVideo = Video(filename: "v.mp4")
+        let otherVideo = Video(filename: "v.mp4")
+
+        let base = Labels(
+            frameStore: EagerFrameStore(frames: []),
+            videos: [baseVideo], skeletons: [baseSkel], tracks: [baseTrack])
+
+        let otherInst = Instance.from(
+            numpy: [[1, 1], [2, 2]], skeleton: otherSkel, track: otherTrack)
+        let otherPred = PredictedInstance.from(
+            numpy: [[100, 100], [200, 200]], skeleton: otherSkel, score: 0.9, track: otherTrack)
+        let otherFrame = LabeledFrame(
+            video: otherVideo, frameIndex: 0, instances: [otherInst, otherPred])
+        let other = Labels(
+            frameStore: EagerFrameStore(frames: [otherFrame]),
+            videos: [otherVideo], skeletons: [otherSkel], tracks: [otherTrack])
+
+        try base.merge(from: other, skeletonMatcher: SkeletonMatcher())
+
+        // (b) Source uncorrupted: other's instances still reference other's own
+        // skeleton/track objects, and the frame still owns the same instances.
+        XCTAssertTrue(otherInst.skeleton === otherSkel)
+        XCTAssertTrue(otherInst.track === otherTrack)
+        XCTAssertTrue(otherPred.skeleton === otherSkel)
+        XCTAssertTrue(otherPred.track === otherTrack)
+        XCTAssertTrue(other.frameStore.frame(at: 0).instances[0] === otherInst)
+        XCTAssertTrue(other.frameStore.frame(at: 0).instances[1] === otherPred)
+        XCTAssertEqual(other.skeletons.count, 1)
+        XCTAssertTrue(other.skeletons[0] === otherSkel)
+
+        // (a) None of other's instances are aliased into base.
+        let mergedFrame = try XCTUnwrap(base.frame(for: baseVideo, at: 0))
+        for inst in mergedFrame.instances {
+            XCTAssertFalse(inst === otherInst)
+            XCTAssertFalse(inst === otherPred)
+        }
+
+        // (c) base's merged instances reference base's skeleton and deduped track.
+        XCTAssertEqual(mergedFrame.instances.count, 2)
+        for inst in mergedFrame.instances {
+            XCTAssertTrue(inst.skeleton === baseSkel)
+            XCTAssertTrue(inst.track === baseTrack)
+            XCTAssertTrue(inst.points.skeleton === baseSkel)
+        }
     }
 }
 
