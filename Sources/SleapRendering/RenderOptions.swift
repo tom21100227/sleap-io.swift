@@ -47,6 +47,21 @@ public struct RenderOptions: Sendable {
     /// Whether to draw nodes.
     public var showNodes: Bool
 
+    /// Whether to draw region-of-interest annotations.
+    public var showROIs: Bool
+
+    /// Whether to draw segmentation mask annotations.
+    public var showMasks: Bool
+
+    /// Whether to draw centroid annotations.
+    public var showCentroids: Bool
+
+    /// Opacity for segmentation mask overlays.
+    public var maskOpacity: CGFloat
+
+    /// Radius/half-size for centroid markers.
+    public var centroidRadius: CGFloat
+
     /// Default rendering options.
     public static let defaults = RenderOptions()
 
@@ -62,7 +77,12 @@ public struct RenderOptions: Sendable {
         showBoundingBoxes: Bool = false,
         predictionOpacity: CGFloat = 0.6,
         showEdges: Bool = true,
-        showNodes: Bool = true
+        showNodes: Bool = true,
+        showROIs: Bool = false,
+        showMasks: Bool = false,
+        showCentroids: Bool = false,
+        maskOpacity: CGFloat = 0.4,
+        centroidRadius: CGFloat = 5.0
     ) {
         self.nodeRadius = nodeRadius
         self.edgeWidth = edgeWidth
@@ -76,5 +96,10 @@ public struct RenderOptions: Sendable {
         self.predictionOpacity = predictionOpacity
         self.showEdges = showEdges
         self.showNodes = showNodes
+        self.showROIs = showROIs
+        self.showMasks = showMasks
+        self.showCentroids = showCentroids
+        self.maskOpacity = maskOpacity
+        self.centroidRadius = centroidRadius
     }
 }
