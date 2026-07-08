@@ -217,6 +217,12 @@ extension Video {
         backend?.prefetch(indices: indices)
     }
 
+    /// Cancel any in-flight prefetch (best-effort). Call when a manual seek
+    /// supersedes the previous location so the wanted frame isn't starved.
+    public func cancelPrefetch() {
+        backend?.cancelPrefetch()
+    }
+
     private func syncMetadataFromBackend() {
         guard let be = backend else { return }
         if let count = be.frameCount {

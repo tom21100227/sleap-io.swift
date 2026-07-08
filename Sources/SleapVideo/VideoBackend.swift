@@ -86,6 +86,11 @@ public protocol VideoBackend: Sendable {
 
     /// Hint to prefetch frames (best-effort, may be a no-op).
     func prefetch(indices: IndexSet)
+
+    /// Cancel any in-flight prefetch (best-effort, may be a no-op). Called when a
+    /// manual seek supersedes the previous location so the wanted frame isn't
+    /// starved of decode bandwidth.
+    func cancelPrefetch()
 }
 
 // MARK: - Default implementations
@@ -121,6 +126,10 @@ extension VideoBackend {
     }
 
     public func prefetch(indices: IndexSet) {
+        // Default: no-op
+    }
+
+    public func cancelPrefetch() {
         // Default: no-op
     }
 }

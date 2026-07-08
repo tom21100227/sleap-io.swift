@@ -8,7 +8,6 @@ import SleapIO
 /// Internally serialized as an actor since AVAssetImageGenerator is not thread-safe.
 public actor AVFoundationBackend: VideoBackend {
     private let asset: AVURLAsset
-    private let generator: AVAssetImageGenerator
     private let _frameCount: Int
     private let _frameSize: (height: Int, width: Int, channels: Int)
     private let _fps: Double
@@ -77,7 +76,6 @@ public actor AVFoundationBackend: VideoBackend {
             width: info.frameSize.width,
             channels: channels
         )
-        self.generator = generator
     }
 
     /// Create a backend for a video file with a shared frame cache.
@@ -100,7 +98,6 @@ public actor AVFoundationBackend: VideoBackend {
             width: info.frameSize.width,
             channels: channels
         )
-        self.generator = generator
     }
 
     /// Build an image generator configured for frame-accurate extraction.
@@ -109,6 +106,32 @@ public actor AVFoundationBackend: VideoBackend {
         generator.appliesPreferredTrackTransform = true
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
+        return generator
+    }
+
+    /// Build a per-request image generator with the requested seek tolerance.
+    ///
+    /// A fresh generator is created per decode so overlapping `frame(at:)` calls
+    /// never share (and race on) one `AVAssetImageGenerator` — independent
+    /// generators over the same asset decode concurrently safely. This removes the
+    /// actor-reentrancy hazard where a suspended decode's tolerance could be
+    /// mutated by a second in-flight call.
+    private static func makeGenerator(
+        for asset: AVURLAsset,
+        tolerance: SeekTolerance,
+        fps: Double
+    ) -> AVAssetImageGenerator {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        switch tolerance {
+        case .exact:
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+        case .adaptive:
+            let halfFrame = CMTimeMake(value: 1, timescale: Int32(fps * 2))
+            generator.requestedTimeToleranceBefore = halfFrame
+            generator.requestedTimeToleranceAfter = halfFrame
+        }
         return generator
     }
 
@@ -147,43 +170,51 @@ public actor AVFoundationBackend: VideoBackend {
             preferredTimescale: duration.timescale
         )
 
-        switch tolerance {
-        case .exact:
-            generator.requestedTimeToleranceBefore = .zero
-            generator.requestedTimeToleranceAfter = .zero
-        case .adaptive:
-            let halfFrame = CMTimeMake(value: 1, timescale: Int32(_fps * 2))
-            generator.requestedTimeToleranceBefore = halfFrame
-            generator.requestedTimeToleranceAfter = halfFrame
+        // Fresh generator per request — see makeGenerator(for:tolerance:fps:).
+        let generator = Self.makeGenerator(for: asset, tolerance: tolerance, fps: _fps)
+        return try await withTaskCancellationHandler {
+            let (image, _) = try await generator.image(at: time)
+            return image
+        } onCancel: {
+            // Stop a superseded (e.g. slow 4K) decode promptly.
+            generator.cancelAllCGImageGeneration()
         }
-
-        let (image, _) = try await generator.image(at: time)
-        return image
     }
 
     nonisolated public func prefetch(indices: IndexSet) {
         Task { await self._startPrefetch(indices: indices) }
     }
 
+    /// Cancel any in-flight prefetch so a fresh manual seek isn't starved of
+    /// decode bandwidth (important on large/4K frames).
+    nonisolated public func cancelPrefetch() {
+        Task { await self._cancelPrefetch() }
+    }
+
+    private func _cancelPrefetch() {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+    }
+
     /// Internal actor-isolated method that cancels any in-flight prefetch and starts a new one.
     private func _startPrefetch(indices: IndexSet) {
         prefetchTask?.cancel()
 
-        let fps = _fps
         let timescale = duration.timescale
+        let fps = _fps
         let frameCount = _frameCount
         let assetRef = self.asset
         let cacheRef = self.frameCache
 
         prefetchTask = Task { [weak self] in
             guard self != nil else { return }
+            // Exact tolerance: prefetched frames land in the same FrameCache that
+            // `.exact` reads consult, so an adaptive (±½-frame) decode can't cache a
+            // neighbor under index k and return the wrong frame on a later exact step.
             let prefetchGenerator = AVAssetImageGenerator(asset: assetRef)
             prefetchGenerator.appliesPreferredTrackTransform = true
-
-            // Use adaptive tolerance for prefetch (speed over accuracy)
-            let halfFrame = CMTimeMake(value: 1, timescale: Int32(fps * 2))
-            prefetchGenerator.requestedTimeToleranceBefore = halfFrame
-            prefetchGenerator.requestedTimeToleranceAfter = halfFrame
+            prefetchGenerator.requestedTimeToleranceBefore = .zero
+            prefetchGenerator.requestedTimeToleranceAfter = .zero
 
             for index in indices {
                 guard !Task.isCancelled else { return }
