@@ -8,6 +8,18 @@ public struct SkeletonCodec {
     /// `nodeNames` is the top-level superset node list from the metadata JSON,
     /// used to resolve integer node IDs to names.
     static func decodeFromNetworkX(_ dict: [String: Any], nodeNames: [String] = []) throws -> Skeleton {
+        // sleap-io 0.5.x wraps the NetworkX graph inside an "nx_graph" key, with
+        // sibling "description"/"preview_image" fields, e.g.
+        //   {"description": null, "nx_graph": {"directed":..., "nodes":..., "links":...},
+        //    "preview_image": null}
+        // Older/`sleap`-written v2.0.0 files store nodes/links/graph directly at the
+        // top level. Unwrap the nx_graph envelope first so both variants share the
+        // rest of the decode path; without this, clip.2node.slp decoded to 0 nodes.
+        var dict = dict
+        if let nxGraph = dict["nx_graph"] as? [String: Any] {
+            dict = nxGraph
+        }
+
         // Handle py/reduce or direct format
         let graphDict: [String: Any]
         if let reduce = dict["py/reduce"] as? [[Any]],
@@ -53,6 +65,10 @@ public struct SkeletonCodec {
         // of the skeleton dict (graphDict), not nested inside graph.
         var nodesByName: [String: Node] = [:]
         var orderedNodes: [Node] = []
+        // Maps a node's `id` (its index into the top-level superset node list) to the
+        // decoded Node, so v2.0.0 links whose source/target are node ids can be
+        // resolved even when this skeleton is a subset/permutation of the superset.
+        var nodesByID: [Int: Node] = [:]
         let context = DecodeContext()
 
         let linksSource = graphDict["links"] ?? graph["links"]
@@ -79,6 +95,9 @@ public struct SkeletonCodec {
                 let node = Node(name: nodeName)
                 nodesByName[nodeName] = node
                 orderedNodes.append(node)
+                if let id = nodeData["id"] as? Int {
+                    nodesByID[id] = node
+                }
                 context.registerNodeName(nodeName, from: nodeData)
             }
         } else if let nodesDict = nodesSource as? [String: Any] {
@@ -109,16 +128,18 @@ public struct SkeletonCodec {
 
                 if let source = link["source"] as? [String: Any] {
                     srcName = extractNodeName(from: source, nodeNames: nodeNames, context: context)
-                } else if let sourceIdx = link["source"] as? Int, sourceIdx < orderedNodes.count {
-                    srcName = orderedNodes[sourceIdx].name
+                } else if let sourceID = link["source"] as? Int,
+                          let name = edgeEndpointName(sourceID, nodesByID: nodesByID, orderedNodes: orderedNodes) {
+                    srcName = name
                 } else {
                     continue
                 }
 
                 if let target = link["target"] as? [String: Any] {
                     dstName = extractNodeName(from: target, nodeNames: nodeNames, context: context)
-                } else if let targetIdx = link["target"] as? Int, targetIdx < orderedNodes.count {
-                    dstName = orderedNodes[targetIdx].name
+                } else if let targetID = link["target"] as? Int,
+                          let name = edgeEndpointName(targetID, nodesByID: nodesByID, orderedNodes: orderedNodes) {
+                    dstName = name
                 } else {
                     continue
                 }
@@ -192,6 +213,23 @@ public struct SkeletonCodec {
     }
 
     // MARK: - Private helpers
+
+    /// Resolve an integer link endpoint in the v2.0.0 node-link format. `id` is a
+    /// node id (index into the top-level superset). Prefer the id→node map; fall
+    /// back to positional lookup for legacy variants whose nodes carry no `id`.
+    private static func edgeEndpointName(
+        _ id: Int,
+        nodesByID: [Int: Node],
+        orderedNodes: [Node]
+    ) -> String? {
+        if let node = nodesByID[id] {
+            return node.name
+        }
+        if id >= 0, id < orderedNodes.count {
+            return orderedNodes[id].name
+        }
+        return nil
+    }
 
     private static func parseSymmetries(
         from value: Any?,
