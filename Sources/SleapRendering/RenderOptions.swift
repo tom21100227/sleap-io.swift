@@ -62,6 +62,15 @@ public struct RenderOptions: Sendable {
     /// Radius/half-size for centroid markers.
     public var centroidRadius: CGFloat
 
+    /// Whether to draw per-node motion trails.
+    public var showTrails: Bool = false
+
+    /// Maximum number of history frames to draw for trails.
+    public var trailLength: Int = 10
+
+    /// Trail line width in points.
+    public var trailWidth: CGFloat = 1.5
+
     /// Default rendering options.
     public static let defaults = RenderOptions()
 
@@ -82,7 +91,10 @@ public struct RenderOptions: Sendable {
         showMasks: Bool = false,
         showCentroids: Bool = false,
         maskOpacity: CGFloat = 0.4,
-        centroidRadius: CGFloat = 5.0
+        centroidRadius: CGFloat = 5.0,
+        showTrails: Bool = false,
+        trailLength: Int = 10,
+        trailWidth: CGFloat = 1.5
     ) {
         self.nodeRadius = nodeRadius
         self.edgeWidth = edgeWidth
@@ -101,5 +113,8 @@ public struct RenderOptions: Sendable {
         self.showCentroids = showCentroids
         self.maskOpacity = maskOpacity
         self.centroidRadius = centroidRadius
+        self.showTrails = showTrails
+        self.trailLength = trailLength
+        self.trailWidth = trailWidth
     }
 }
