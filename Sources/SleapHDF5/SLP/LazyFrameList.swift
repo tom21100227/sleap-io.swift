@@ -129,9 +129,9 @@ extension SLPReader {
         let metadataGroup = try file.openGroup(name: "metadata")
         let formatId = try metadataGroup.readFloatAttribute(name: "format_id")
 
-        if formatId > kMaxSupportedFormatVersion {
-            throw SleapIOError.formatVersionTooNew(formatId)
-        }
+        // Reject only versions strictly newer than the supported cap. Versions
+        // 1.6-2.4 load on a best-effort basis, skipping unmodeled datasets.
+        try validateFormatVersion(formatId)
 
         let jsonStr = try metadataGroup.readStringAttribute(name: "json")
         let metadata = try SLPMetadata.parse(json: jsonStr, formatId: formatId)
@@ -173,9 +173,25 @@ extension SLPReader {
 
         // 5. Read small metadata datasets (suggestions, sessions, etc.)
         let suggestions = try readSuggestionsInternal(from: file, videos: videos, videoIdMap: videoIdMap)
-        let sessions = try readSessionsInternal(from: file, videos: videos, videoIdMap: videoIdMap)
+        // Sessions are decoded through the shared ``SessionSchema/makeSession`` so
+        // the lazy path restores calibration + frame groups too (issue #56). The
+        // lazy frame list is passed as the frame store so ``decodeFrameGroup`` only
+        // materializes the handful of frames referenced by frame groups (and those
+        // stay identity-stable with later `labels[i]` access).
+        let sessions = try readSessionsInternal(
+            from: file, videos: videos, videoIdMap: videoIdMap, frames: frameList)
         let rois = try readROIsInternal(from: file, formatId: formatId)
         let masks = try readMasksInternal(from: file, formatId: formatId)
+
+        // Annotation datasets modeled independently of the ROI/mask tables:
+        // identities (/identities_json), bounding boxes (/bboxes), and centroids
+        // (/centroids). Each is gated on dataset presence and read best-effort
+        // (see the SLPReader methods). This mirrors the eager path in
+        // ``SLPReader/readFromFile`` so the default (lazy) load also populates them.
+        let identities = SLPReader.readIdentities(from: file)
+        let bboxes = SLPReader.readBboxes(from: file)
+        let centroids = SLPReader.readCentroids(from: file)
+        let labelImages = SLPReader.readLabelImages(from: file)
 
         return Labels(
             frameStore: frameList,
@@ -186,7 +202,11 @@ extension SLPReader {
             sessions: sessions,
             provenance: metadata.provenance,
             rois: rois,
-            masks: masks
+            masks: masks,
+            bboxes: bboxes,
+            centroids: centroids,
+            identities: identities,
+            labelImages: labelImages
         )
     }
 
@@ -332,8 +352,14 @@ extension SLPReader {
         return suggestions
     }
 
+    /// Decode `/sessions_json` on the lazy path through the same
+    /// ``SessionSchema/makeSession(from:videos:videoIdMap:frames:)`` the eager
+    /// reader uses, so calibration, the camera→video map, and synchronized frame
+    /// groups are all restored (issue #56). `frames` is the lazy frame store; only
+    /// the frames referenced by frame groups are materialized (and cached), so the
+    /// common no-session / no-frame-group file materializes nothing.
     private static func readSessionsInternal(
-        from file: HDF5File, videos: [Video], videoIdMap: [Int: Int]
+        from file: HDF5File, videos: [Video], videoIdMap: [Int: Int], frames: FrameStore
     ) throws -> [RecordingSession] {
         guard file.exists(name: "sessions_json") else { return [] }
         let ds = try file.openDataset(name: "sessions_json")
@@ -342,23 +368,8 @@ extension SLPReader {
         for str in strings {
             guard let data = str.data(using: .utf8),
                   let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            let session = RecordingSession()
-            if let camVideos = dict["camera_to_video"] as? [[String: Any]] {
-                for cv in camVideos {
-                    let camName = cv["camera_name"] as? String ?? "camera"
-                    let videoIdx = cv["video_idx"] as? Int ?? 0
-                    let camera = Camera(name: camName)
-                    guard let resolvedIdx = SLPVideoTable.resolvedIndex(
-                        for: videoIdx,
-                        videoIdMap: videoIdMap,
-                        videoCount: videos.count
-                    ) else {
-                        continue
-                    }
-                    session.cameraToVideo[camera] = videos[resolvedIdx]
-                }
-            }
-            sessions.append(session)
+            sessions.append(SessionSchema.makeSession(
+                from: dict, videos: videos, videoIdMap: videoIdMap, frames: frames))
         }
         return sessions
     }

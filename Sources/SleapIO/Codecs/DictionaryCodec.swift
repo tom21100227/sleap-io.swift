@@ -81,7 +81,8 @@ public struct DictionaryCodec {
             return sd
         }
 
-        dict["provenance"] = labels.provenance
+        // Bridge JSONValue provenance to untyped Foundation objects for interop.
+        dict["provenance"] = labels.provenance.mapValues { $0.jsonObject }
 
         return dict
     }
@@ -183,7 +184,12 @@ public struct DictionaryCodec {
             }
         }
 
-        let provenance = dict["provenance"] as? [String: String] ?? [:]
+        var provenance: [String: JSONValue] = [:]
+        if let prov = dict["provenance"] as? [String: Any] {
+            for (k, v) in prov {
+                provenance[k] = JSONValue(jsonObject: v)
+            }
+        }
 
         let store = EagerFrameStore(frames: frames)
         return Labels(

@@ -8,6 +8,18 @@ public struct SkeletonCodec {
     /// `nodeNames` is the top-level superset node list from the metadata JSON,
     /// used to resolve integer node IDs to names.
     static func decodeFromNetworkX(_ dict: [String: Any], nodeNames: [String] = []) throws -> Skeleton {
+        // sleap-io 0.5.x wraps the NetworkX graph inside an "nx_graph" key, with
+        // sibling "description"/"preview_image" fields, e.g.
+        //   {"description": null, "nx_graph": {"directed":..., "nodes":..., "links":...},
+        //    "preview_image": null}
+        // Older/`sleap`-written v2.0.0 files store nodes/links/graph directly at the
+        // top level. Unwrap the nx_graph envelope first so both variants share the
+        // rest of the decode path; without this, clip.2node.slp decoded to 0 nodes.
+        var dict = dict
+        if let nxGraph = dict["nx_graph"] as? [String: Any] {
+            dict = nxGraph
+        }
+
         // Handle py/reduce or direct format
         let graphDict: [String: Any]
         if let reduce = dict["py/reduce"] as? [[Any]],
@@ -53,14 +65,40 @@ public struct SkeletonCodec {
         // of the skeleton dict (graphDict), not nested inside graph.
         var nodesByName: [String: Node] = [:]
         var orderedNodes: [Node] = []
+        // Maps a node's `id` (its index into the top-level superset node list) to the
+        // decoded Node, so v2.0.0 links whose source/target are node ids can be
+        // resolved even when this skeleton is a subset/permutation of the superset.
+        var nodesByID: [Int: Node] = [:]
+        let context = DecodeContext()
+
+        let linksSource = graphDict["links"] ?? graph["links"]
+        if let links = linksSource as? [[String: Any]] {
+            // Standalone skeleton.json files can list top-level nodes as
+            // {"id": {"py/id": N}} while defining Node objects in links.
+            // Register those definitions before resolving the nodes array.
+            for link in links {
+                for key in ["source", "target"] {
+                    if let nodeData = link[key] as? [String: Any] {
+                        let nodeName = extractNodeName(from: nodeData, nodeNames: nodeNames, context: context)
+                        if nodeName != "unknown" {
+                            context.registerNodeName(nodeName, from: nodeData)
+                        }
+                    }
+                }
+            }
+        }
 
         let nodesSource = graphDict["nodes"] ?? graph["nodes"]
         if let nodesData = nodesSource as? [[String: Any]] {
             for nodeData in nodesData {
-                let nodeName = extractNodeName(from: nodeData, nodeNames: nodeNames)
+                let nodeName = extractNodeName(from: nodeData, nodeNames: nodeNames, context: context)
                 let node = Node(name: nodeName)
                 nodesByName[nodeName] = node
                 orderedNodes.append(node)
+                if let id = nodeData["id"] as? Int {
+                    nodesByID[id] = node
+                }
+                context.registerNodeName(nodeName, from: nodeData)
             }
         } else if let nodesDict = nodesSource as? [String: Any] {
             // Alternative format: nodes as dictionary keyed by index
@@ -69,54 +107,58 @@ public struct SkeletonCodec {
             }
             for key in sortedKeys {
                 if let nodeData = nodesDict[key] as? [String: Any] {
-                    let nodeName = extractNodeName(from: nodeData, nodeNames: nodeNames)
+                    let nodeName = extractNodeName(from: nodeData, nodeNames: nodeNames, context: context)
                     let node = Node(name: nodeName)
                     nodesByName[nodeName] = node
                     orderedNodes.append(node)
+                    context.registerNodeName(nodeName, from: nodeData)
                 }
             }
         }
 
         let skeleton = Skeleton(name: name, nodes: orderedNodes)
+        context.registerEdgeTypes(in: graphDict)
+        context.registerEdgeTypes(in: graph)
 
-        // Parse edges (links) — look in graphDict first
-        let linksSource = graphDict["links"] ?? graph["links"]
+        // Parse body edges and symmetry links — look in graphDict first
         if let links = linksSource as? [[String: Any]] {
             for link in links {
                 let srcName: String
                 let dstName: String
 
                 if let source = link["source"] as? [String: Any] {
-                    srcName = extractNodeName(from: source)
-                } else if let sourceIdx = link["source"] as? Int, sourceIdx < orderedNodes.count {
-                    srcName = orderedNodes[sourceIdx].name
+                    srcName = extractNodeName(from: source, nodeNames: nodeNames, context: context)
+                } else if let sourceID = link["source"] as? Int,
+                          let name = edgeEndpointName(sourceID, nodesByID: nodesByID, orderedNodes: orderedNodes) {
+                    srcName = name
                 } else {
                     continue
                 }
 
                 if let target = link["target"] as? [String: Any] {
-                    dstName = extractNodeName(from: target)
-                } else if let targetIdx = link["target"] as? Int, targetIdx < orderedNodes.count {
-                    dstName = orderedNodes[targetIdx].name
+                    dstName = extractNodeName(from: target, nodeNames: nodeNames, context: context)
+                } else if let targetID = link["target"] as? Int,
+                          let name = edgeEndpointName(targetID, nodesByID: nodesByID, orderedNodes: orderedNodes) {
+                    dstName = name
                 } else {
                     continue
                 }
 
                 if let src = nodesByName[srcName], let dst = nodesByName[dstName] {
-                    skeleton.addEdge(from: src, to: dst)
+                    if context.resolveEdgeTypeValue(link["type"]) == 2 {
+                        skeleton.addSymmetry(src, dst)
+                    } else {
+                        skeleton.addEdge(from: src, to: dst)
+                    }
                 }
             }
         }
 
-        // Parse symmetries
-        if let graphData = graph["graph"] as? [String: Any],
-           let symmetries = graphData["symmetries"] as? [[String: Any]] {
-            for sym in symmetries {
-                if let names = sym["nodes"] as? [String], names.count == 2,
-                   let a = nodesByName[names[0]], let b = nodesByName[names[1]] {
-                    skeleton.addSymmetry(a, b)
-                }
-            }
+        // Parse legacy symmetries arrays as well; addSymmetry deduplicates with
+        // type-2 symmetry links.
+        parseSymmetries(from: graph["symmetries"], nodesByName: nodesByName, into: skeleton)
+        if let graphData = graph["graph"] as? [String: Any] {
+            parseSymmetries(from: graphData["symmetries"], nodesByName: nodesByName, into: skeleton)
         }
 
         return skeleton
@@ -124,6 +166,7 @@ public struct SkeletonCodec {
 
     /// Encode a skeleton to the NetworkX graph JSON format for SLP metadata.
     static func encodeToNetworkX(_ skeleton: Skeleton) -> [String: Any] {
+        // TODO(#24): full jsonpickle-canonical encoder.
         var nodes: [[String: Any]] = []
         for node in skeleton.nodes {
             nodes.append([
@@ -171,7 +214,187 @@ public struct SkeletonCodec {
 
     // MARK: - Private helpers
 
-    private static func extractNodeName(from dict: [String: Any], nodeNames: [String] = []) -> String {
+    /// Resolve an integer link endpoint in the v2.0.0 node-link format. `id` is a
+    /// node id (index into the top-level superset). Prefer the id→node map; fall
+    /// back to positional lookup for legacy variants whose nodes carry no `id`.
+    private static func edgeEndpointName(
+        _ id: Int,
+        nodesByID: [Int: Node],
+        orderedNodes: [Node]
+    ) -> String? {
+        if let node = nodesByID[id] {
+            return node.name
+        }
+        if id >= 0, id < orderedNodes.count {
+            return orderedNodes[id].name
+        }
+        return nil
+    }
+
+    private static func parseSymmetries(
+        from value: Any?,
+        nodesByName: [String: Node],
+        into skeleton: Skeleton
+    ) {
+        guard let symmetries = value as? [[String: Any]] else { return }
+        for sym in symmetries {
+            if let names = sym["nodes"] as? [String], names.count == 2,
+               let a = nodesByName[names[0]], let b = nodesByName[names[1]] {
+                skeleton.addSymmetry(a, b)
+            }
+        }
+    }
+
+    private final class DecodeContext {
+        private var nextImplicitID = 0
+        private var explicitNodeNamesByPyID: [Int: String] = [:]
+        private var positionalNodeNamesByPyID: [Int: String] = [:]
+        private var edgeTypeValuesByPyID: [Int: Int] = [:]
+
+        func registerNodeName(_ name: String, from dict: [String: Any]) {
+            if let id = explicitPyID(in: dict) {
+                explicitNodeNamesByPyID[id] = name
+            }
+            positionalNodeNamesByPyID[nextImplicitID] = name
+            nextImplicitID += 1
+        }
+
+        func nodeName(forPyID id: Int) -> String? {
+            explicitNodeNamesByPyID[id] ?? positionalNodeNamesByPyID[id]
+        }
+
+        func registerEdgeTypes(in value: Any) {
+            walk(value)
+        }
+
+        func resolveEdgeTypeValue(_ value: Any?) -> Int? {
+            guard let value else { return nil }
+
+            if let intValue = value as? Int {
+                return intValue
+            }
+            if let stringValue = value as? String {
+                switch stringValue.uppercased() {
+                case "BODY": return 1
+                case "SYMMETRY": return 2
+                default: return Int(stringValue)
+                }
+            }
+            if let dict = value as? [String: Any] {
+                if dict.count == 1, let id = explicitPyID(in: dict) {
+                    return edgeTypeValuesByPyID[id] ?? id
+                }
+                if let raw = dict["value"] ?? dict["_value_"] ?? dict["val"],
+                   let resolved = resolveEdgeTypeValue(raw) {
+                    registerEdgeTypeValue(resolved, from: dict)
+                    return resolved
+                }
+                if let reduce = dict["py/reduce"],
+                   let resolved = firstEdgeTypeValue(in: reduce) {
+                    registerEdgeTypeValue(resolved, from: dict)
+                    return resolved
+                }
+                if let state = dict["py/state"],
+                   let resolved = firstEdgeTypeValue(in: state) {
+                    registerEdgeTypeValue(resolved, from: dict)
+                    return resolved
+                }
+            }
+            if let array = value as? [Any] {
+                return firstEdgeTypeValue(in: array)
+            }
+            return nil
+        }
+
+        private func walk(_ value: Any) {
+            if let dict = value as? [String: Any] {
+                if let resolved = resolveEdgeTypeValue(dict) {
+                    registerEdgeTypeValue(resolved, from: dict)
+                }
+                for child in dict.values {
+                    walk(child)
+                }
+            } else if let array = value as? [Any] {
+                for child in array {
+                    walk(child)
+                }
+            }
+        }
+
+        private func registerEdgeTypeValue(_ value: Int, from dict: [String: Any]) {
+            if let id = explicitPyID(in: dict) {
+                edgeTypeValuesByPyID[id] = value
+            }
+        }
+
+        private func firstEdgeTypeValue(in value: Any) -> Int? {
+            if let intValue = value as? Int, intValue == 1 || intValue == 2 {
+                return intValue
+            }
+            if let stringValue = value as? String {
+                switch stringValue.uppercased() {
+                case "BODY": return 1
+                case "SYMMETRY": return 2
+                default: return nil
+                }
+            }
+            if let dict = value as? [String: Any] {
+                if dict.count == 1, let id = explicitPyID(in: dict) {
+                    return edgeTypeValuesByPyID[id] ?? id
+                }
+                for key in ["value", "_value_", "val", "py/reduce", "py/state"] {
+                    if let child = dict[key], let resolved = firstEdgeTypeValue(in: child) {
+                        return resolved
+                    }
+                }
+                for child in dict.values {
+                    if let resolved = firstEdgeTypeValue(in: child) {
+                        return resolved
+                    }
+                }
+            }
+            if let array = value as? [Any] {
+                for child in array {
+                    if let resolved = firstEdgeTypeValue(in: child) {
+                        return resolved
+                    }
+                }
+            }
+            return nil
+        }
+
+        private func explicitPyID(in dict: [String: Any]) -> Int? {
+            if let id = dict["py/id"] as? Int {
+                return id
+            }
+            if let id = dict["py/id"] as? String {
+                return Int(id)
+            }
+            return nil
+        }
+    }
+
+    private static func extractNodeName(
+        from dict: [String: Any],
+        nodeNames: [String] = [],
+        context: DecodeContext? = nil
+    ) -> String {
+        if dict.count == 1,
+           let pyID = dict["py/id"] as? Int,
+           let name = context?.nodeName(forPyID: pyID) {
+            return name
+        }
+        if dict.count == 1,
+           let pyIDString = dict["py/id"] as? String,
+           let pyID = Int(pyIDString),
+           let name = context?.nodeName(forPyID: pyID) {
+            return name
+        }
+        if let state = dict["py/state"] as? [String: Any],
+           let tuple = state["py/tuple"] as? [Any],
+           let name = tuple.first as? String {
+            return name
+        }
         if let state = dict["py/state"] as? [String: Any],
            let name = state["name"] as? String {
             return name
@@ -183,6 +406,17 @@ public struct SkeletonCodec {
         // top-level superset node list by index.
         if let id = dict["id"] as? Int, id >= 0, id < nodeNames.count {
             return nodeNames[id]
+        }
+        if let idDict = dict["id"] as? [String: Any],
+           let pyID = idDict["py/id"] as? Int,
+           let name = context?.nodeName(forPyID: pyID) {
+            return name
+        }
+        if let idDict = dict["id"] as? [String: Any],
+           let pyIDString = idDict["py/id"] as? String,
+           let pyID = Int(pyIDString),
+           let name = context?.nodeName(forPyID: pyID) {
+            return name
         }
         if let id = dict["id"] as? String {
             return id

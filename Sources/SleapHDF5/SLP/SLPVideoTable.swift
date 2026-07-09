@@ -57,7 +57,33 @@ enum SLPVideoTable {
             video.frameSize = (height: shape[1], width: shape[2], channels: shape[3])
         }
 
+        // Decode the source-video lineage. Python serializes the provenance as a
+        // fully-nested video dict under `source_video` (see `video_to_dict`), so it
+        // is decoded recursively into a real ``Video/sourceVideo`` object graph.
+        // Legacy files that only carry `original_video` are treated as a
+        // single-level source, matching upstream `make_video`.
+        if let sourceDict = dict["source_video"] as? [String: Any] {
+            video.sourceVideo = decodeVideo(from: sourceDict)
+        } else if let originalDict = dict["original_video"] as? [String: Any] {
+            video.sourceVideo = decodeVideo(from: originalDict)
+        }
+
         return video
+    }
+
+    /// Decode a ``Video`` from a JSON string, e.g. the `json` attribute of an
+    /// embedded `source_video` group. Returns `nil` for empty or `"{}"` payloads
+    /// (an embedded video with no recorded source).
+    static func decodeVideo(fromJSON json: String) -> Video? {
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "{}",
+              let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data),
+              let dict = parsed as? [String: Any],
+              !dict.isEmpty else {
+            return nil
+        }
+        return decodeVideo(from: dict)
     }
 
     static func configureBackends(
@@ -89,6 +115,14 @@ enum SLPVideoTable {
             }
             if let size = backend.frameSize {
                 video.frameSize = size
+            }
+
+            // Recover the source-video lineage from the embedded `source_video`
+            // group when it was not already present in the videos_json entry.
+            // Swift-written .pkg.slp files store the provenance only in the HDF5
+            // group (not inline), so this is the primary path for embedded videos.
+            if video.sourceVideo == nil {
+                video.sourceVideo = decodeVideo(fromJSON: backend.sourceVideoJSON)
             }
         }
     }

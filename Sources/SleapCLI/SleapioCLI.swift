@@ -8,7 +8,7 @@ struct SleapioCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sleap-io",
         abstract: "SLEAP pose data inspection and conversion tool",
-        subcommands: [InfoCommand.self, ShowCommand.self, ConvertCommand.self]
+        subcommands: [InfoCommand.self, ShowCommand.self, ConvertCommand.self, BenchCommand.self]
     )
 
     /// When invoked without a subcommand, print usage info and exit with error.

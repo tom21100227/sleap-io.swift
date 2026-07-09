@@ -1,8 +1,12 @@
 import Foundation
 
 /// A named landmark in a skeleton. Identity type.
-public final class Node: Hashable, Sendable {
-    public let name: String
+///
+/// `name` is mutable to support skeleton node renaming (`Skeleton.renameNode`).
+/// Equality/hashing remain identity-based, so a `Node` stays a stable dictionary
+/// key across renames. Rename only through `Skeleton` so its name cache stays in sync.
+public final class Node: Hashable, @unchecked Sendable {
+    public var name: String
 
     public init(name: String) {
         self.name = name

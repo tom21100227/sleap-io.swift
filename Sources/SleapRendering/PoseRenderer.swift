@@ -51,15 +51,18 @@ public struct PoseRenderer: Sendable {
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
 
-        let palette = ColorPalette.palette(named: options.palette)
+        let colorScheme = ColorScheme(paletteName: options.palette, colorBy: options.colorBy)
+        let tracks = Self.uniqueTracks(from: instances)
 
         for (instanceIndex, instance) in instances.enumerated() {
             let isPredicted = instance is PredictedInstance
             let alpha = isPredicted ? options.predictionOpacity : 1.0
 
-            // Determine color: by instance index, wrapping around the palette.
-            let colorIndex = instanceIndex
-            let baseColor = palette[colorIndex % palette.count]
+            let baseColor = colorScheme.color(
+                for: instance,
+                instanceIndex: instanceIndex,
+                tracks: tracks
+            )
             let color = baseColor.copy(alpha: alpha) ?? baseColor
 
             // Draw edges first (so nodes appear on top).
@@ -75,10 +78,22 @@ public struct PoseRenderer: Sendable {
             drawNodes(
                 instance: instance,
                 skeleton: skeleton,
+                colorScheme: colorScheme,
                 color: color,
+                instanceIndex: instanceIndex,
+                tracks: tracks,
                 transform: transform,
                 in: context
             )
+
+            if options.showScores, let predicted = instance as? PredictedInstance {
+                drawScores(
+                    instance: predicted,
+                    color: color,
+                    transform: transform,
+                    in: context
+                )
+            }
 
             // Draw labels if requested.
             if options.showLabels {
@@ -174,6 +189,17 @@ public struct PoseRenderer: Sendable {
         return context
     }
 
+    private static func uniqueTracks(from instances: [Instance]) -> [Track] {
+        var tracks: [Track] = []
+        for instance in instances {
+            guard let track = instance.track else { continue }
+            if !tracks.contains(where: { $0 === track }) {
+                tracks.append(track)
+            }
+        }
+        return tracks
+    }
+
     static func transformedBoundingRect(_ rect: CGRect, by transform: CGAffineTransform) -> CGRect {
         let corners = [
             CGPoint(x: rect.minX, y: rect.minY).applying(transform),
@@ -228,11 +254,19 @@ public struct PoseRenderer: Sendable {
     private func drawNodes(
         instance: Instance,
         skeleton: Skeleton,
+        colorScheme: ColorScheme,
         color: CGColor,
+        instanceIndex: Int,
+        tracks: [Track],
         transform: CGAffineTransform,
         in context: CGContext
     ) {
+        context.setStrokeColor(color)
         context.setFillColor(color)
+        context.setLineWidth(max(1.0, options.edgeWidth))
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+
         let r = options.nodeRadius
         let points = instance.points
 
@@ -241,11 +275,113 @@ public struct PoseRenderer: Sendable {
             guard pt.visible, !pt.x.isNaN, !pt.y.isNaN else { continue }
 
             let center = CGPoint(x: CGFloat(pt.x), y: CGFloat(pt.y)).applying(transform)
-            let rect = CGRect(
-                x: center.x - r, y: center.y - r,
-                width: r * 2, height: r * 2
+            let nodeBaseColor = colorScheme.color(
+                for: instance,
+                instanceIndex: instanceIndex,
+                tracks: tracks,
+                nodeIndex: i
             )
-            context.fillEllipse(in: rect)
+            let nodeColor = nodeBaseColor.copy(alpha: color.alpha) ?? nodeBaseColor
+            context.setStrokeColor(nodeColor)
+            context.setFillColor(nodeColor)
+
+            if pt.complete {
+                fillMarker(shape: options.markerShape, center: center, radius: r, in: context)
+            } else {
+                strokeMarker(shape: options.markerShape, center: center, radius: r, in: context)
+            }
+        }
+    }
+
+    private func fillMarker(
+        shape: MarkerShape,
+        center: CGPoint,
+        radius: CGFloat,
+        in context: CGContext
+    ) {
+        if shape == .cross {
+            strokeMarker(shape: shape, center: center, radius: radius, in: context)
+            return
+        }
+
+        context.addPath(markerPath(shape: shape, center: center, radius: radius))
+        context.fillPath()
+    }
+
+    private func strokeMarker(
+        shape: MarkerShape,
+        center: CGPoint,
+        radius: CGFloat,
+        in context: CGContext
+    ) {
+        context.addPath(markerPath(shape: shape, center: center, radius: radius))
+        context.strokePath()
+    }
+
+    private func markerPath(shape: MarkerShape, center: CGPoint, radius: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        let r = radius
+
+        switch shape {
+        case .circle:
+            path.addEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
+        case .square:
+            path.addRect(CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
+        case .triangle:
+            path.move(to: CGPoint(x: center.x, y: center.y - r))
+            path.addLine(to: CGPoint(x: center.x + r, y: center.y + r))
+            path.addLine(to: CGPoint(x: center.x - r, y: center.y + r))
+            path.closeSubpath()
+        case .diamond:
+            path.move(to: CGPoint(x: center.x, y: center.y - r))
+            path.addLine(to: CGPoint(x: center.x + r, y: center.y))
+            path.addLine(to: CGPoint(x: center.x, y: center.y + r))
+            path.addLine(to: CGPoint(x: center.x - r, y: center.y))
+            path.closeSubpath()
+        case .cross:
+            path.move(to: CGPoint(x: center.x - r, y: center.y - r))
+            path.addLine(to: CGPoint(x: center.x + r, y: center.y + r))
+            path.move(to: CGPoint(x: center.x + r, y: center.y - r))
+            path.addLine(to: CGPoint(x: center.x - r, y: center.y + r))
+        }
+
+        return path
+    }
+
+    private func drawScores(
+        instance: PredictedInstance,
+        color: CGColor,
+        transform: CGAffineTransform,
+        in context: CGContext
+    ) {
+        let points = instance.points
+        let scores = instance.predictedPoints.scores
+        let fontSize: CGFloat = 9.0
+        let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+        let attributes: [CFString: Any] = [
+            kCTFontAttributeName: font,
+            kCTForegroundColorFromContextAttributeName: true,
+        ]
+
+        for i in 0..<min(points.count, scores.count) {
+            let pt = points[i]
+            guard pt.visible, !pt.x.isNaN, !pt.y.isNaN else { continue }
+
+            let center = CGPoint(x: CGFloat(pt.x), y: CGFloat(pt.y)).applying(transform)
+            let scoreText = String(format: "%.2f", scores[i])
+            let attrString = CFAttributedStringCreate(
+                kCFAllocatorDefault, scoreText as CFString, attributes as CFDictionary)!
+            let line = CTLineCreateWithAttributedString(attrString)
+
+            context.saveGState()
+            context.setFillColor(color)
+            context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+            context.textPosition = CGPoint(
+                x: center.x + options.nodeRadius + 2,
+                y: center.y - options.nodeRadius - 2
+            )
+            CTLineDraw(line, context)
+            context.restoreGState()
         }
     }
 

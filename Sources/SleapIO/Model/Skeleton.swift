@@ -155,6 +155,113 @@ public final class Skeleton: Hashable, @unchecked Sendable {
         }
     }
 
+    // MARK: - Node rename / reorder (E3.3)
+
+    /// Rename a single node. Instances are unaffected (points are stored by index;
+    /// nodes are shared by reference). Mirrors `Skeleton.rename_node`.
+    /// - Throws: ``SleapIOError/invalidSkeleton(_:)`` if `oldName` is absent or
+    ///   `newName` already names a different node.
+    public func renameNode(_ oldName: String, to newName: String) throws {
+        guard let node = _nameToNode[oldName] else {
+            throw SleapIOError.invalidSkeleton("Node '\(oldName)' not found in skeleton '\(name)'")
+        }
+        if newName != oldName, _nameToNode[newName] != nil {
+            throw SleapIOError.invalidSkeleton("Node '\(newName)' already exists in skeleton '\(name)'")
+        }
+        node.name = newName
+        _nameToNode[oldName] = nil
+        _nameToNode[newName] = node
+    }
+
+    /// Rename all nodes in order. The new names must be unique. Allows permutations
+    /// and swaps (names are applied, then caches rebuilt). Mirrors the list form of
+    /// `Skeleton.rename_nodes`.
+    public func renameNodes(_ newNames: [String]) throws {
+        guard newNames.count == nodes.count else {
+            throw SleapIOError.invalidSkeleton("Expected \(nodes.count) names, got \(newNames.count)")
+        }
+        guard Set(newNames).count == newNames.count else {
+            throw SleapIOError.invalidSkeleton("New node names must be unique")
+        }
+        for (node, newName) in zip(nodes, newNames) { node.name = newName }
+        _rebuildCaches()
+    }
+
+    /// Rename nodes via an old-name → new-name map. Applied atomically (set then
+    /// rebuild), so swaps are allowed. Mirrors the dict form of `Skeleton.rename_nodes`.
+    public func renameNodes(_ nameMap: [String: String]) throws {
+        for oldName in nameMap.keys where _nameToNode[oldName] == nil {
+            throw SleapIOError.invalidSkeleton("Node '\(oldName)' not found in skeleton '\(name)'")
+        }
+        let resulting = nodes.map { nameMap[$0.name] ?? $0.name }
+        guard Set(resulting).count == resulting.count else {
+            throw SleapIOError.invalidSkeleton("Rename would produce duplicate node names")
+        }
+        for node in nodes { if let newName = nameMap[node.name] { node.name = newName } }
+        _rebuildCaches()
+    }
+
+    /// Reorder nodes to `newOrder` (a permutation of the current node names) and
+    /// permute each migrating instance's points to stay aligned.
+    ///
+    /// Unlike Python (where points are name-keyed), our points are index-aligned to
+    /// node order, so instances must be migrated to preserve alignment — pass every
+    /// instance that uses this skeleton.
+    public func reorderNodes(_ newOrder: [String], migratingInstances instances: [Instance]) throws {
+        let oldNodeCount = nodes.count
+        guard newOrder.count == nodes.count, Set(newOrder) == Set(nodeNames) else {
+            throw SleapIOError.invalidSkeleton("newOrder must be a permutation of the current node names")
+        }
+        var perm = [Int]()
+        perm.reserveCapacity(newOrder.count)
+        var newNodes = [Node]()
+        for nodeName in newOrder {
+            guard let node = _nameToNode[nodeName], let oldIdx = index(of: node) else {
+                throw SleapIOError.invalidSkeleton("Node '\(nodeName)' not found in skeleton '\(name)'")
+            }
+            newNodes.append(node)
+            perm.append(oldIdx)
+        }
+        nodes = newNodes
+        _rebuildCaches()
+
+        for instance in instances where instance.skeleton === self {
+            if let predicted = instance as? PredictedInstance {
+                guard predicted.predictedPoints.count == oldNodeCount,
+                      predicted.predictedPoints.scores.count == oldNodeCount else {
+                    continue
+                }
+                predicted.predictedPoints = Self.permuted(predicted.predictedPoints, by: perm, skeleton: self)
+            } else {
+                guard instance.points.count == oldNodeCount else { continue }
+                instance.points = Self.permuted(instance.points, by: perm, skeleton: self)
+            }
+        }
+    }
+
+    private static func permuted(_ points: PointsArray, by perm: [Int], skeleton: Skeleton) -> PointsArray {
+        var coords = ContiguousArray<Float>(repeating: .nan, count: perm.count * 2)
+        var vis = ContiguousArray<Bool>(repeating: false, count: perm.count)
+        var comp = ContiguousArray<Bool>(repeating: false, count: perm.count)
+        for newIdx in 0..<perm.count {
+            let oldIdx = perm[newIdx]
+            coords[newIdx * 2] = points.coordinates[oldIdx * 2]
+            coords[newIdx * 2 + 1] = points.coordinates[oldIdx * 2 + 1]
+            vis[newIdx] = points.visibility[oldIdx]
+            comp[newIdx] = points.completeness[oldIdx]
+        }
+        var result = PointsArray(coordinates: coords, visibility: vis, completeness: comp)
+        result.skeleton = skeleton
+        return result
+    }
+
+    private static func permuted(_ predicted: PredictedPointsArray, by perm: [Int], skeleton: Skeleton) -> PredictedPointsArray {
+        let permutedPoints = permuted(predicted.points, by: perm, skeleton: skeleton)
+        var scores = ContiguousArray<Float>(repeating: 0, count: perm.count)
+        for newIdx in 0..<perm.count { scores[newIdx] = predicted.scores[perm[newIdx]] }
+        return PredictedPointsArray(pointsArray: permutedPoints, scores: scores)
+    }
+
     // MARK: - Edge management
 
     public func addEdge(from source: Node, to destination: Node) {
@@ -189,6 +296,51 @@ public final class Skeleton: Hashable, @unchecked Sendable {
     /// O(1) index of a node.
     public func index(of node: Node) -> Int? {
         _nodeToIndex[ObjectIdentifier(node)]
+    }
+
+    /// Whether a node with the given name exists. Mirrors Python `name in skeleton`.
+    public func contains(nodeNamed name: String) -> Bool {
+        _nameToNode[name] != nil
+    }
+
+    // MARK: - Derived accessors
+    //
+    // These mirror the read-only views Python `Skeleton` exposes and are used
+    // throughout rendering, matching, and tensor export. Edges/symmetries whose
+    // endpoints are not part of this skeleton are skipped rather than crashing.
+
+    /// Node names in order. Mirrors `Skeleton.node_names`.
+    public var nodeNames: [String] {
+        nodes.map(\.name)
+    }
+
+    /// Edges as `(sourceIndex, destinationIndex)` pairs. Mirrors `Skeleton.edge_inds`.
+    public var edgeInds: [(Int, Int)] {
+        edges.compactMap { edge in
+            guard let s = index(of: edge.source),
+                  let d = index(of: edge.destination) else { return nil }
+            return (s, d)
+        }
+    }
+
+    /// Edges as `(sourceName, destinationName)` pairs. Mirrors `Skeleton.edge_names`.
+    public var edgeNames: [(String, String)] {
+        edges.map { ($0.source.name, $0.destination.name) }
+    }
+
+    /// Symmetries as sorted `(indexA, indexB)` pairs. Mirrors `Skeleton.symmetry_inds`.
+    public var symmetryInds: [(Int, Int)] {
+        symmetries.compactMap { sym in
+            guard let a = index(of: sym.nodeA),
+                  let b = index(of: sym.nodeB) else { return nil }
+            return a <= b ? (a, b) : (b, a)
+        }
+    }
+
+    /// Symmetries as `(nameA, nameB)` pairs, ordered to match ``symmetryInds``.
+    /// Mirrors `Skeleton.symmetry_names`.
+    public var symmetryNames: [(String, String)] {
+        symmetryInds.map { (nodes[$0.0].name, nodes[$0.1].name) }
     }
 
     // MARK: - Identity equality

@@ -85,6 +85,8 @@ extension Video {
     ///
     /// - "media", "MediaVideo": AVFoundation backend for video files
     /// - "imageSequence", "ImageVideo": Image directory backend
+    /// - "tiff", "TiffVideo": Multi-page TIFF stack backend
+    /// - "seq", "SeqVideo": Norpix StreamPix .seq backend
     /// - "hdf5", "HDF5Video": Embedded HDF5 video (requires loading through Labels.load)
     public func open() async throws {
         if let opener = backendOpener {
@@ -98,6 +100,12 @@ extension Video {
             case "imageSequence", "ImageVideo":
                 let url = URL(fileURLWithPath: filename)
                 backend = try ImageSequenceBackend(directory: url)
+            case "tiff", "TiffVideo":
+                let url = URL(fileURLWithPath: filename)
+                backend = try TiffVideo(url: url)
+            case "seq", "SeqVideo":
+                let url = URL(fileURLWithPath: filename)
+                backend = try SeqVideo(url: url)
             case "hdf5", "HDF5Video":
                 throw SleapIOError.videoError(
                     "HDF5 video backend requires loading through Labels.load(from:). " +
@@ -184,6 +192,19 @@ extension Video {
         return results.compactMap { $0 }
     }
 
+    /// Extract a single frame as a raw row-major `(height, width, channels)` UInt8
+    /// buffer, alongside the ``frame(at:)`` `CGImage` path.
+    ///
+    /// The channel count follows the backend's autodetected ``frameSize`` (grayscale
+    /// videos collapse to a single channel), mirroring the upstream `(H, W, C)`
+    /// ndarray returned by `Video.get_frame`.
+    public func rawFrame(at index: Int) async throws -> RawFrame {
+        guard let be = backend else {
+            throw SleapIOError.videoError("Video backend not opened. Call open() first.")
+        }
+        return try await be.rawFrame(at: index)
+    }
+
     /// Async subscript for frame access.
     public subscript(index: Int) -> CGImage {
         get async throws {
@@ -194,6 +215,12 @@ extension Video {
     /// Hint to prefetch frames (best-effort).
     public func prefetch(indices: IndexSet) {
         backend?.prefetch(indices: indices)
+    }
+
+    /// Cancel any in-flight prefetch (best-effort). Call when a manual seek
+    /// supersedes the previous location so the wanted frame isn't starved.
+    public func cancelPrefetch() {
+        backend?.cancelPrefetch()
     }
 
     private func syncMetadataFromBackend() {

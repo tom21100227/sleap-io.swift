@@ -1,5 +1,6 @@
 import Foundation
 import SleapIO
+import SleapVideo
 
 /// Public API entry points for loading and saving Labels.
 /// These are extensions on Labels that delegate to the appropriate format-specific codec.
@@ -7,13 +8,27 @@ extension Labels {
 
     /// Load labels from a file. Format is inferred from extension.
     /// For `.slp` files, this uses lazy loading by default.
+    ///
+    /// - Parameters:
+    ///   - url: The file to load.
+    ///   - format: Optional explicit format; inferred from the extension when nil.
+    ///   - openVideos: When `true` (the default), video backends are opened during
+    ///     load (e.g. embedded HDF5 videos). When `false`, backends are left closed
+    ///     so a project loads even when video paths are broken or missing (deferred
+    ///     open); the video can be reopened later via `Video.open()` after
+    ///     relocation. Only affects backends that would otherwise open eagerly
+    ///     during load (embedded SLP videos); external media backends are always
+    ///     opened lazily on first frame access regardless of this flag.
     public static func load(from url: URL,
-                            format: FileFormat? = nil) async throws -> Labels {
+                            format: FileFormat? = nil,
+                            openVideos: Bool = true) async throws -> Labels {
         let resolvedFormat = try format ?? inferLoadFormat(from: url)
 
         switch resolvedFormat {
         case .slp:
-            return try await SLPReader.readLazy(from: url.path)
+            let labels = try await SLPReader.readLazy(from: url.path)
+            if !openVideos { deferVideoOpen(for: labels) }
+            return labels
         case .cocoJSON:
             return try COCOCodec.read(from: url.path)
         case .csv:
@@ -37,13 +52,21 @@ extension Labels {
     }
 
     /// Load labels eagerly (all frames materialized).
+    ///
+    /// - Parameter openVideos: See ``load(from:format:openVideos:)``. When `false`,
+    ///   video backends are left closed after load so a project opens with broken
+    ///   or missing video paths (deferred open).
     public static func loadEager(from url: URL,
-                                 format: FileFormat? = nil) async throws -> Labels {
+                                 format: FileFormat? = nil,
+                                 openVideos: Bool = true,
+                                 progress: ProgressReporter? = nil) async throws -> Labels {
         let resolvedFormat = try format ?? inferLoadFormat(from: url)
 
         switch resolvedFormat {
         case .slp:
-            return try await SLPReader.read(from: url.path)
+            let labels = try await SLPReader.read(from: url.path, progress: progress)
+            if !openVideos { deferVideoOpen(for: labels) }
+            return labels
         case .cocoJSON:
             return try COCOCodec.read(from: url.path)
         case .csv:
@@ -66,15 +89,54 @@ extension Labels {
         }
     }
 
+    /// Close any video backends opened during load, implementing the
+    /// `openVideos: false` deferred-open contract.
+    ///
+    /// Closing drops the open decode backend (and its frame cache) but retains the
+    /// video's `backendOpener` and cached shape metadata, so the video can be
+    /// reopened on demand later (e.g. after relocation) via `Video.open()`.
+    /// External media backends are never opened during load, so this is a no-op
+    /// for them and only affects eagerly-opened embedded SLP videos.
+    private static func deferVideoOpen(for labels: Labels) {
+        for video in labels.videos {
+            video.close()
+        }
+    }
+
     /// Save labels to a file. Format is inferred from extension.
+    ///
+    /// - Parameter embed: Which frames, if any, to embed as image data when saving
+    ///   an SLP file (mirrors Python sleap-io's `embed=` argument). Defaults to
+    ///   ``SleapHDF5/EmbedSelection/none``. When left at `.none`, the legacy
+    ///   cross-module `SaveOptions.embedFrames` bool is honored as a convenience:
+    ///   `embedFrames == true` maps to ``SleapHDF5/EmbedSelection/all`` (Python's
+    ///   `embed=True`). An explicit `embed` argument always wins. Embedded frames
+    ///   are re-encoded with `options.embeddedImageFormat`. Ignored for non-SLP
+    ///   formats.
     public func save(to url: URL,
                      format: FileFormat? = nil,
-                     options: SaveOptions = .defaults) async throws {
+                     options: SaveOptions = .defaults,
+                     embed: EmbedSelection = .none,
+                     progress: ProgressReporter? = nil) async throws {
         let resolvedFormat = try format ?? Labels.inferSaveFormat(from: url)
 
         switch resolvedFormat {
         case .slp:
-            try await SLPWriter.write(self, to: url.path)
+            stampSleapIOVersion()
+            // Reconcile the two embed surfaces into one coherent selection:
+            // an explicit `embed` wins; otherwise the cross-module
+            // `SaveOptions.embedFrames` bool maps to `.all` (Python's `embed=True`).
+            let resolvedEmbed: EmbedSelection
+            if case .none = embed, options.embedFrames {
+                resolvedEmbed = .all
+            } else {
+                resolvedEmbed = embed
+            }
+            try await SLPWriter.write(
+                self, to: url.path,
+                embed: resolvedEmbed,
+                imageFormat: options.embeddedImageFormat,
+                progress: progress)
         case .cocoJSON:
             try COCOCodec.write(self, to: url.path)
         case .csv:

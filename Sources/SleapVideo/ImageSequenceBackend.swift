@@ -29,13 +29,20 @@ public actor ImageSequenceBackend: VideoBackend {
             .filter { imageExtensions.contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
 
-        // Read first image to determine size
+        // Read first image to determine size and autodetect grayscale by sampling
+        // its decoded pixels (channels collapse to 1 when all channels are equal).
         if let firstURL = imageURLs.first,
            let source = CGImageSourceCreateWithURL(firstURL as CFURL, nil),
            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let width = properties[kCGImagePropertyPixelWidth] as? Int,
            let height = properties[kCGImagePropertyPixelHeight] as? Int {
-            self._frameSize = (height: height, width: width, channels: 3)
+            let channels: Int
+            if let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                channels = VideoPixelBuffer.isGrayscale(image) ? 1 : 3
+            } else {
+                channels = 3
+            }
+            self._frameSize = (height: height, width: width, channels: channels)
         } else {
             self._frameSize = nil
         }

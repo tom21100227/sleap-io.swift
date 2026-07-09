@@ -1,5 +1,7 @@
 import Foundation
 
+public typealias SleapIOWarning = RecoverableSleapError
+
 /// Protocol for frame stores that can provide metadata without materialization.
 public protocol FrameMetadataProvider {
     func frameMetadata() -> [(videoIndex: Int, frameIndex: Int)]
@@ -103,6 +105,7 @@ public final class Labels: @unchecked Sendable {
             throw SleapIOError.mutationWhileLazy("Cannot replace videos while lazy. Call materialize() first.")
         }
         _videos = videos
+        invalidateFrameLookup()
     }
 
     /// Replace the skeletons list. Throws `mutationWhileLazy` if `isLazy`.
@@ -125,9 +128,23 @@ public final class Labels: @unchecked Sendable {
 
     public var suggestions: [SuggestionFrame]
     public var sessions: [RecordingSession]
-    public var provenance: [String: String]
+    /// Free-form provenance metadata, mirroring Python sleap-io's `dict[str, Any]`.
+    ///
+    /// Values are ``JSONValue`` so arbitrary JSON (strings, numbers, booleans,
+    /// nested arrays/objects) round-trips through save/load without being coerced
+    /// to strings.
+    public var provenance: [String: JSONValue]
     public var rois: [ROI]
     public var masks: [SegmentationMask]
+    /// Bounding-box annotations for the dataset. Mirrors ``rois`` / ``masks``.
+    public var bboxes: [BoundingBox]
+    /// Centroid annotations for the dataset. Mirrors ``rois`` / ``masks``.
+    public var centroids: [Centroid]
+    /// Ground-truth identity annotations for the dataset. Mirrors ``rois`` / ``masks``.
+    public var identities: [Identity]
+    /// Per-pixel label-image (dense integer segmentation) annotations for the
+    /// dataset. Mirrors ``rois`` / ``masks``.
+    public var labelImages: [LabelImage]
 
     // MARK: - Init
 
@@ -141,6 +158,10 @@ public final class Labels: @unchecked Sendable {
         self.provenance = [:]
         self.rois = []
         self.masks = []
+        self.bboxes = []
+        self.centroids = []
+        self.identities = []
+        self.labelImages = []
     }
 
     /// Internal initializer used by readers.
@@ -150,9 +171,13 @@ public final class Labels: @unchecked Sendable {
                 tracks: [Track],
                 suggestions: [SuggestionFrame] = [],
                 sessions: [RecordingSession] = [],
-                provenance: [String: String] = [:],
+                provenance: [String: JSONValue] = [:],
                 rois: [ROI] = [],
-                masks: [SegmentationMask] = []) {
+                masks: [SegmentationMask] = [],
+                bboxes: [BoundingBox] = [],
+                centroids: [Centroid] = [],
+                identities: [Identity] = [],
+                labelImages: [LabelImage] = []) {
         self.frameStore = frameStore
         self._videos = videos
         self._skeletons = skeletons
@@ -162,6 +187,10 @@ public final class Labels: @unchecked Sendable {
         self.provenance = provenance
         self.rois = rois
         self.masks = masks
+        self.bboxes = bboxes
+        self.centroids = centroids
+        self.identities = identities
+        self.labelImages = labelImages
     }
 
     // MARK: - Lazy loading
@@ -174,6 +203,9 @@ public final class Labels: @unchecked Sendable {
         guard isLazy else { return }
         let allFrames = frameStore.allFrames()
         frameStore = EagerFrameStore(frames: allFrames)
+        // Frame order is preserved by allFrames(), but invalidate defensively so the
+        // index is rebuilt against the eager store.
+        invalidateFrameLookup()
     }
 
     // MARK: - Query
@@ -191,14 +223,54 @@ public final class Labels: @unchecked Sendable {
     }
 
     /// The labeled frame for a specific video and frame index, if it exists.
+    ///
+    /// Backed by a cached `(videoIndex, frameIndex) -> store position` index that is
+    /// built lazily on first use (via ``frameMetadata()``, so it does not materialize
+    /// lazy frames) and invalidated on structural mutation. This makes repeated
+    /// lookups O(1) instead of the previous O(n) linear scan.
     public func frame(for video: Video, at frameIndex: Int) -> LabeledFrame? {
-        for i in 0..<frameStore.count {
-            let f = frameStore.frame(at: i)
-            if f.video === video && f.frameIndex == frameIndex {
-                return f
-            }
+        guard let videoIdx = videoIndex(of: video) else {
+            return nil
         }
-        return nil
+        guard let position = frameLookup()[FrameKey(video: videoIdx, frame: frameIndex)] else {
+            return nil
+        }
+        return frameStore.frame(at: position)
+    }
+
+    /// Index of a video in the identity table by object identity, or `nil`.
+    private func videoIndex(of video: Video) -> Int? {
+        _videos.firstIndex { $0 === video }
+    }
+
+    // MARK: - Frame lookup index
+
+    private struct FrameKey: Hashable {
+        let video: Int
+        let frame: Int
+    }
+
+    /// Cached `(videoIndex, frameIndex) -> store position` map. Invalidated by
+    /// structural mutations (add/remove/merge/materialize/replace videos).
+    private var _frameLookupCache: [FrameKey: Int]?
+
+    private func frameLookup() -> [FrameKey: Int] {
+        if let cache = _frameLookupCache { return cache }
+        let meta = frameMetadata()
+        var map = [FrameKey: Int](minimumCapacity: meta.count)
+        for (position, m) in meta.enumerated() {
+            // First occurrence wins, matching the previous linear-scan semantics.
+            let key = FrameKey(video: m.videoIndex, frame: m.frameIndex)
+            if map[key] == nil { map[key] = position }
+        }
+        _frameLookupCache = map
+        return map
+    }
+
+    /// Invalidate the frame-lookup index. Call after any structural mutation that
+    /// changes the frame list or the video ordering.
+    private func invalidateFrameLookup() {
+        _frameLookupCache = nil
     }
 
     /// All instances across all frames that belong to a given track.
@@ -268,6 +340,7 @@ public final class Labels: @unchecked Sendable {
     public func addFrame(_ frame: LabeledFrame) throws {
         try requireMaterialized("add frame")
         eagerStore.frames.append(frame)
+        invalidateFrameLookup()
         // Register new identity objects
         if !_videos.contains(where: { $0 === frame.video }) {
             _videos.append(frame.video)
@@ -286,6 +359,7 @@ public final class Labels: @unchecked Sendable {
     public func removeFrame(_ frame: LabeledFrame) throws {
         try requireMaterialized("remove frame")
         eagerStore.frames.removeAll { $0 === frame }
+        invalidateFrameLookup()
     }
 
     /// Remove all predicted instances from all frames.
@@ -313,33 +387,241 @@ public final class Labels: @unchecked Sendable {
         _tracks.removeAll { $0 === track }
     }
 
-    /// Merge another Labels into this one.
-    public func merge(from other: Labels, strategy: LabeledFrame.MergeStrategy = .auto) throws {
+    /// Merge another `Labels` into this one, deduplicating the identity tables
+    /// with the supplied matchers and merging frames via the frame-level cascade.
+    ///
+    /// Mirrors the upstream `Labels.merge`. Incoming videos, skeletons, and tracks
+    /// are resolved against this collection using `videoMatcher` / `skeletonMatcher`
+    /// / `trackMatcher`: a matched item is reused (and incoming instances/frames are
+    /// remapped onto it), while an unmatched item is appended. Frames that already
+    /// exist are merged with
+    /// ``LabeledFrame/merge(from:strategy:instanceMatcher:)`` (resolving duplicate
+    /// instances with `instanceMatcher`); frames that do not exist are added under
+    /// the matched video.
+    ///
+    /// `other` is never mutated: every instance brought over from `other` is a
+    /// deep clone (via ``Instance/clone(skeleton:track:)``) remapped onto this
+    /// collection's matched skeleton/track objects, so the source graph is left
+    /// byte-for-byte unchanged and no live instance is aliased across the two
+    /// collections. This mirrors Python sleap-io's `_map_instance`.
+    ///
+    /// `errorMode` governs the skeleton-mismatch validation carried over from the
+    /// earlier merge implementation: when this collection already has skeletons and
+    /// an incoming skeleton matches none of them, a
+    /// ``RecoverableSleapError/skeletonMismatch(expected:found:)`` is raised
+    /// (`.strict`), collected into ``MergeResult/errors`` (`.warn`), or dropped
+    /// (`.ignore`) before the unmatched skeleton is appended. Merging into a
+    /// collection that has no skeletons never reports a mismatch.
+    ///
+    /// A record describing the merge (source statistics, strategy, and result
+    /// counts) is appended to the `"merge_history"` array in ``provenance``.
+    ///
+    /// - Parameters:
+    ///   - other: The collection to merge into this one.
+    ///   - strategy: Per-frame conflict strategy. Defaults to ``FrameStrategy/auto``.
+    ///   - videoMatcher: Matcher used to dedup videos. Defaults to `VideoMatcher()`.
+    ///   - skeletonMatcher: Matcher used to dedup skeletons. Defaults to
+    ///     `SkeletonMatcher()`.
+    ///   - trackMatcher: Matcher used to dedup tracks. Defaults to `TrackMatcher()`.
+    ///   - instanceMatcher: Matcher used to detect duplicate instances within a
+    ///     frame. Defaults to ``InstanceMatcher/duplicate``.
+    ///   - errorMode: How skeleton-mismatch validation errors are handled.
+    ///     Defaults to ``ErrorMode/ignore``.
+    ///   - progress: Optional progress reporter, invoked with the fraction of
+    ///     frames processed.
+    /// - Returns: A ``MergeResult`` summarizing the merge.
+    @discardableResult
+    public func merge(
+        from other: Labels,
+        strategy: FrameStrategy = .auto,
+        videoMatcher: VideoMatcher = VideoMatcher(),
+        skeletonMatcher: SkeletonMatcher = SkeletonMatcher(),
+        trackMatcher: TrackMatcher = TrackMatcher(),
+        instanceMatcher: InstanceMatcher = .duplicate,
+        errorMode: ErrorMode = .ignore,
+        progress: ProgressReporter? = nil
+    ) throws -> MergeResult {
         try requireMaterialized("merge")
-        // Merge identity tables
-        for video in other.videos {
-            if !_videos.contains(where: { $0 === video }) {
-                _videos.append(video)
-            }
-        }
-        for skeleton in other.skeletons {
-            if !_skeletons.contains(where: { $0 === skeleton }) {
-                _skeletons.append(skeleton)
-            }
-        }
-        for track in other.tracks {
-            if !_tracks.contains(where: { $0 === track }) {
-                _tracks.append(track)
-            }
-        }
-        // Merge frames
-        for i in 0..<other.frameStore.count {
-            let otherFrame = other.frameStore.frame(at: i)
-            if let existing = frame(for: otherFrame.video, at: otherFrame.frameIndex) {
-                existing.merge(from: otherFrame, strategy: strategy)
+
+        var result = MergeResult(successful: true)
+        var collector = ErrorCollector()
+
+        // Source statistics for the provenance record (self is the only object
+        // mutated below, so these stay valid throughout the merge).
+        let sourceStats: JSONValue = .object([
+            "n_frames": .int(other.frameCount),
+            "n_videos": .int(other.videos.count),
+            "n_skeletons": .int(other.skeletons.count),
+            "n_tracks": .int(other.tracks.count),
+        ])
+
+        // Skeletons: dedup via matcher, preserving the skeleton-mismatch validation.
+        // The empty-collection case never reports a mismatch (snapshot up front so
+        // skeletons appended during the loop don't retroactively enable it).
+        let selfHadSkeletons = !_skeletons.isEmpty
+        var skeletonMap: [ObjectIdentifier: Skeleton] = [:]
+        for incoming in other.skeletons {
+            if let matched = _skeletons.first(where: { skeletonMatcher.match($0, incoming) }) {
+                skeletonMap[ObjectIdentifier(incoming)] = matched
             } else {
-                eagerStore.frames.append(otherFrame)
+                if selfHadSkeletons {
+                    try collector.handle(
+                        .skeletonMismatch(
+                            expected: _skeletons.flatMap(\.nodeNames),
+                            found: incoming.nodeNames),
+                        mode: errorMode)
+                }
+                _skeletons.append(incoming)
+                skeletonMap[ObjectIdentifier(incoming)] = incoming
             }
+        }
+
+        // Videos: dedup via matcher (reuse local match or append).
+        var videoMap: [ObjectIdentifier: Video] = [:]
+        for incoming in other.videos {
+            if let matched = videoMatcher.firstMatch(for: incoming, in: _videos) {
+                videoMap[ObjectIdentifier(incoming)] = matched
+            } else {
+                _videos.append(incoming)
+                videoMap[ObjectIdentifier(incoming)] = incoming
+            }
+        }
+        // The video table (and thus video indexing) may have changed.
+        invalidateFrameLookup()
+
+        // Tracks: dedup via matcher.
+        var trackMap: [ObjectIdentifier: Track] = [:]
+        for incoming in other.tracks {
+            if let matched = trackMatcher.firstMatch(for: incoming, in: _tracks) {
+                trackMap[ObjectIdentifier(incoming)] = matched
+            } else {
+                _tracks.append(incoming)
+                trackMap[ObjectIdentifier(incoming)] = incoming
+            }
+        }
+
+        // Frames: merge into a matching local frame or add a remapped copy.
+        //
+        // Every incoming frame is first rebuilt as a fully independent CLONE whose
+        // instances are deep-copied and remapped onto this collection's matched
+        // video/skeleton/track objects. `other`'s live objects are therefore never
+        // captured (new-frame branch) nor handed to ``LabeledFrame/merge`` (which
+        // may append/assign them), so the source graph is left uncorrupted.
+        let totalFrames = other.frameStore.count
+        for i in 0..<totalFrames {
+            progress?(Double(i) / Double(totalFrames))
+            let otherFrame = other.frameStore.frame(at: i)
+            let mappedVideo = videoMap[ObjectIdentifier(otherFrame.video)] ?? otherFrame.video
+
+            let clonedFrame = LabeledFrame(
+                video: mappedVideo,
+                frameIndex: otherFrame.frameIndex,
+                instances: otherFrame.instances.map {
+                    clonedRemappedInstance($0, skeletonMap: skeletonMap, trackMap: trackMap)
+                },
+                isNegative: otherFrame.isNegative)
+
+            if let existing = frame(for: mappedVideo, at: otherFrame.frameIndex) {
+                // Count additions/removals by identity churn so wholesale-replacement
+                // strategies (e.g. `.keepNew`, `.replacePredictions`) are accounted
+                // for correctly rather than by a raw before/after count delta.
+                let before = Set(existing.instances.map(ObjectIdentifier.init))
+                let conflicts = try existing.merge(
+                    from: clonedFrame, strategy: strategy, instanceMatcher: instanceMatcher)
+                let after = Set(existing.instances.map(ObjectIdentifier.init))
+                result.instancesAdded += after.subtracting(before).count
+                result.instancesRemoved += before.subtracting(after).count
+                result.conflicts.append(contentsOf: conflicts)
+                for conflict in conflicts {
+                    switch conflict.resolution {
+                    case .keptOriginal: result.instancesSkipped += 1
+                    case .keptNew, .updatedTracks: result.instancesUpdated += 1
+                    default: break
+                    }
+                }
+                result.framesMerged += 1
+            } else {
+                result.instancesAdded += clonedFrame.instances.count
+                eagerStore.frames.append(clonedFrame)
+                // Keep the lookup index consistent so a later iteration targeting the
+                // same (video, frameIndex) finds this newly appended frame.
+                invalidateFrameLookup()
+                result.framesMerged += 1
+            }
+        }
+        progress?(1.0)
+
+        // Suggestions: carry over any not already present on the mapped video.
+        for suggestion in other.suggestions {
+            let mappedVideo = videoMap[ObjectIdentifier(suggestion.video)] ?? suggestion.video
+            let exists = suggestions.contains {
+                $0.video === mappedVideo && $0.frameIndex == suggestion.frameIndex
+            }
+            if !exists {
+                suggestions.append(
+                    SuggestionFrame(video: mappedVideo, frameIndex: suggestion.frameIndex))
+            }
+        }
+
+        result.errors = collector.errors
+        result.successful = collector.errors.isEmpty
+
+        // Record the merge in provenance history.
+        var history = provenance["merge_history"]?.arrayValue ?? []
+        history.append(.object([
+            "source_filename": other.provenance["filename"] ?? .null,
+            "target_filename": provenance["filename"] ?? .null,
+            "source_labels": sourceStats,
+            "strategy": .string(Labels.frameStrategyName(strategy)),
+            "result": .object([
+                "frames_merged": .int(result.framesMerged),
+                "instances_added": .int(result.instancesAdded),
+                "instances_removed": .int(result.instancesRemoved),
+                "conflicts": .int(result.conflicts.count),
+            ]),
+        ]))
+        provenance["merge_history"] = .array(history)
+
+        return result
+    }
+
+    /// Produce a deep clone of an incoming instance remapped onto this
+    /// collection's matched local skeleton/track objects.
+    ///
+    /// The clone shares no mutable state with `instance` (so the source graph is
+    /// never mutated), and its skeleton/track are the local objects the merge
+    /// matchers deduped onto. When the matched skeleton differs from the incoming
+    /// one, points are re-aligned by node name via
+    /// ``Instance/replaceSkeleton(_:nodeNamesMap:)`` (which tolerates a different
+    /// node order), matching the previous in-place remap semantics.
+    private func clonedRemappedInstance(
+        _ instance: Instance,
+        skeletonMap: [ObjectIdentifier: Skeleton],
+        trackMap: [ObjectIdentifier: Track]
+    ) -> Instance {
+        let mappedTrack: Track? = instance.track.flatMap {
+            trackMap[ObjectIdentifier($0)] ?? $0
+        }
+        // Clone under the ORIGINAL skeleton so points stay index-aligned, then
+        // remap onto the matched local skeleton by name if it is a distinct object.
+        let clone = instance.clone(skeleton: instance.skeleton, track: mappedTrack)
+        if let mappedSkeleton = skeletonMap[ObjectIdentifier(instance.skeleton)],
+           mappedSkeleton !== instance.skeleton {
+            clone.replaceSkeleton(mappedSkeleton)
+        }
+        return clone
+    }
+
+    /// The upstream-style string identifier for a frame merge strategy, used in
+    /// the `provenance["merge_history"]` record.
+    private static func frameStrategyName(_ strategy: FrameStrategy) -> String {
+        switch strategy {
+        case .auto: return "auto"
+        case .keepOriginal: return "keep_original"
+        case .keepNew: return "keep_new"
+        case .keepBoth: return "keep_both"
+        case .updateTracks: return "update_tracks"
+        case .replacePredictions: return "replace_predictions"
         }
     }
 
